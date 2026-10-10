@@ -49,3 +49,14 @@ describe('Settings', () => {
     expect(seen).toEqual([0.5]);
   });
 });
+
+describe('Settings: run options', () => {
+  it('keeps valid mode and difficulty and repairs invalid ones', () => {
+    const storage = new MemoryStorage();
+    storage.setItem('infinite-frequency.settings.v1', JSON.stringify({ mode: 'free', difficulty: 'insane', obstacles: 'yes' }));
+    const settings = new Settings(storage as unknown as Storage);
+    expect(settings.values.mode).toBe('free');
+    expect(settings.values.difficulty).toBe(DEFAULT_SETTINGS.difficulty);
+    expect(settings.values.obstacles).toBe(DEFAULT_SETTINGS.obstacles);
+  });
+});

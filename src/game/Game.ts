@@ -15,6 +15,10 @@ import { randomSeed, type RunSummary } from '../ui/Menu';
 import { VehicleController, copyVehicleState, createVehicleState } from '../vehicle/VehicleController';
 import { VehicleModel } from '../vehicle/VehicleModel';
 import { Environment } from '../world/Environment';
+import { generateChart } from '../rhythm/ChartGenerator';
+import { RhythmRenderer } from '../rhythm/RhythmRenderer';
+import { RhythmSystem, type RhythmEvent } from '../rhythm/RhythmSystem';
+import type { Difficulty } from '../rhythm/types';
 import { GameDirector } from './GameDirector';
 import { LEAD_IN, songTimeAtDistance } from './runTiming';
 
@@ -22,12 +26,22 @@ export interface MusicSource {
   buffer: AudioBuffer;
   analysis: MusicAnalysis;
   title: string;
+  /** Stable identifier for records (content hash for files). */
+  songId: string;
+}
+
+/** Rhythm Run settings; a music run without them is a Free Ride (GDD §7). */
+export interface RhythmOptions {
+  difficulty: Difficulty;
+  obstacles: boolean;
 }
 
 export interface RunOptions {
   seed: number;
   /** Song to play; without it the run is an endless free drive. */
   music?: MusicSource;
+  /** Collectibles, score and obstacles; only used together with `music`. */
+  rhythm?: RhythmOptions;
   /** False for the attract mode behind the menu (autopilot, no HUD hints). */
   interactive: boolean;
 }
@@ -64,6 +78,10 @@ export class Game {
   private readonly vehicleModel = new VehicleModel();
   private readonly hud: Hud;
   private readonly director: GameDirector;
+  private readonly rhythmRenderer = new RhythmRenderer();
+  private rhythm: RhythmSystem | null = null;
+  /** Judgements from simulation steps, consumed by the next rendered frame. */
+  private readonly pendingEvents: RhythmEvent[] = [];
 
   private generator: TrackGenerator;
   private readonly trackRenderer: TrackRenderer;
@@ -102,7 +120,7 @@ export class Game {
     this.generator = new TrackGenerator(0);
     this.trackRenderer = new TrackRenderer(this.generator);
     this.vehicle = new VehicleController(this.generator.roadWidth);
-    this.scene.add(this.trackRenderer.group, this.vehicleModel.root);
+    this.scene.add(this.trackRenderer.group, this.vehicleModel.root, this.rhythmRenderer.group);
     this.hud = new Hud(container);
 
     this.director = new GameDirector(settings.values, {
@@ -157,6 +175,23 @@ export class Game {
     this.chase.reset();
     copyVehicleState(this.vehicle.state, this.previous);
 
+    this.pendingEvents.length = 0;
+    if (music && options.rhythm) {
+      const chart = generateChart(music.analysis, {
+        seed: options.seed,
+        difficulty: options.rhythm.difficulty,
+        obstacles: options.rhythm.obstacles,
+        tuning: this.vehicle.tuning,
+        roadWidth: this.generator.roadWidth,
+        lateralLimit: this.vehicle.lateralLimit,
+      });
+      this.rhythm = new RhythmSystem(chart, this.vehicle.tuning.halfWidth);
+      this.rhythmRenderer.setChart(chart);
+    } else {
+      this.rhythm = null;
+      this.rhythmRenderer.setChart(null);
+    }
+
     if (music && timeline) {
       this.audio.setBuffer(music.buffer);
       this.director.setTimeline(timeline, -LEAD_IN);
@@ -170,7 +205,7 @@ export class Game {
 
     this.input.clearPressed();
     this.hud.setVisible(true);
-    this.hud.setRun(music ? music.title : null, options.interactive);
+    this.hud.setRun(music ? music.title : null, options.interactive, this.rhythm !== null);
   }
 
   /** Restarts the current run, optionally with another seed. */
@@ -201,6 +236,7 @@ export class Game {
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.trackRenderer.dispose();
     this.vehicleModel.dispose();
+    this.rhythmRenderer.dispose();
     this.environment.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
@@ -219,6 +255,7 @@ export class Game {
       steer = clamp((target - this.vehicle.state.lateral) * 0.4, -1, 1);
     }
     this.vehicle.update(dt, steer);
+    this.rhythm?.step(this.previous, this.vehicle.state, (event) => this.pendingEvents.push(event));
   }
 
   private render(alpha: number, frameDt: number): void {
@@ -250,6 +287,8 @@ export class Game {
     this.generator.pointAt(s.distance + this.chase.settings.lookAhead, s.lateral * 0.5, 1.2, this.aheadFrame, this.aheadPoint);
     const fovBoost = 6 * (music.intensity - 0.35) + 2 * music.bass;
     this.chase.update(frameDt, this.vehiclePosition, this.frame, this.aheadPoint, s.speed / this.vehicle.tuning.cruiseSpeed, fovBoost);
+    this.processRhythmEvents();
+    this.rhythmRenderer.update(frameDt, s.distance, songTime, music.beatPulse, this.generator, this.chase.camera);
     this.environment.update(this.chase.camera.position);
     this.environment.applyMusic(music);
     this.renderer.toneMappingExposure = 1.1 + 0.6 * music.flash;
@@ -310,6 +349,31 @@ export class Game {
     this.input.consumePressed('special');
   }
 
+  /** Visual and HUD feedback for judgements made by the simulation. */
+  private processRhythmEvents(): void {
+    for (const event of this.pendingEvents) {
+      this.rhythmRenderer.handleEvent(event, this.generator);
+      if (event.type === 'collect') {
+        const { result, note } = event;
+        if (result.bonus > 0) this.hud.showJudgement(`Sequência perfeita +${result.bonus}`, 'bonus');
+        else if (note.kind === 'special') this.hud.showJudgement(`Especial +${result.points}`, 'special');
+        else if (result.quality === 'perfect') this.hud.showJudgement(`Perfeito +${result.points}`, 'perfect');
+        else this.hud.showJudgement(`Bom +${result.points}`, 'good');
+      } else if (event.type === 'miss') {
+        this.hud.showJudgement('Errou', 'miss');
+      } else {
+        this.hud.showJudgement(event.penalty > 0 ? `Colisão −${event.penalty}` : 'Colisão', 'hit');
+        this.hud.flashHit(this.settings.values.reduceFlashes);
+        this.chase.addShake(0.8);
+      }
+    }
+    this.pendingEvents.length = 0;
+    if (this.rhythm) {
+      const score = this.rhythm.score;
+      this.hud.setScore(score.score, score.multiplier, score.combo);
+    }
+  }
+
   private onSongEnd(): void {
     if (this.finishedAt !== null) return;
     this.finishedAt = this.loop.renderTime;
@@ -325,6 +389,8 @@ export class Game {
       distance: this.vehicle.state.distance,
       bpm: music.analysis.tempo.reliable ? music.analysis.tempo.bpm : 0,
       seed: this.run.seed,
+      songId: music.songId,
+      rhythm: this.run.rhythm && this.rhythm ? { ...this.run.rhythm, score: this.rhythm.score.result() } : undefined,
     };
   }
 

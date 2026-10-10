@@ -1,3 +1,5 @@
+import type { Difficulty, GameMode } from '../rhythm/types';
+
 /**
  * Player settings persisted in localStorage (GDD §3.4, §12.4).
  */
@@ -11,6 +13,10 @@ export interface SettingsData {
   /** Removes full-screen flashes and limits strobing. */
   reduceFlashes: boolean;
   cameraShake: boolean;
+  /** Last chosen game mode, difficulty and obstacle option (ready screen). */
+  mode: GameMode;
+  difficulty: Difficulty;
+  obstacles: boolean;
 }
 
 export const DEFAULT_SETTINGS: SettingsData = {
@@ -19,6 +25,9 @@ export const DEFAULT_SETTINGS: SettingsData = {
   effects: 1,
   reduceFlashes: false,
   cameraShake: true,
+  mode: 'rhythm',
+  difficulty: 'normal',
+  obstacles: true,
 };
 
 export const LATENCY_LIMIT_MS = 300;
@@ -70,6 +79,9 @@ function sanitise(data: SettingsData): SettingsData {
     effects: num(data.effects, DEFAULT_SETTINGS.effects, 0, 1),
     reduceFlashes: typeof data.reduceFlashes === 'boolean' ? data.reduceFlashes : DEFAULT_SETTINGS.reduceFlashes,
     cameraShake: typeof data.cameraShake === 'boolean' ? data.cameraShake : DEFAULT_SETTINGS.cameraShake,
+    mode: data.mode === 'free' || data.mode === 'rhythm' ? data.mode : DEFAULT_SETTINGS.mode,
+    difficulty: ['easy', 'normal', 'hard'].includes(data.difficulty) ? data.difficulty : DEFAULT_SETTINGS.difficulty,
+    obstacles: typeof data.obstacles === 'boolean' ? data.obstacles : DEFAULT_SETTINGS.obstacles,
   };
 }
 

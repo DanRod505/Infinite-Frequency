@@ -7,7 +7,8 @@ import type { AnalysisProgress } from './audio/analysisTypes';
 import { Settings } from './core/Settings';
 import { setUrlSeed } from './core/url';
 import { Game, type MusicSource } from './game/Game';
-import { Menu, randomSeed } from './ui/Menu';
+import { Records } from './rhythm/Records';
+import { Menu, randomSeed, type RunSummary } from './ui/Menu';
 
 const MAX_FILE_BYTES = 200 * 1024 * 1024;
 const MIN_DURATION = 10;
@@ -29,6 +30,7 @@ export class App {
   private readonly settings = new Settings();
   private readonly audio = new AudioEngine();
   private readonly cache = new AnalysisCache();
+  private readonly records = new Records();
   private client: AnalysisClient | null = null;
   private readonly game: Game;
   private readonly menu: Menu;
@@ -43,7 +45,7 @@ export class App {
         this.menu.showPause();
       },
       onResumeRequest: () => this.resume(),
-      onFinished: (summary) => this.menu.showResults(summary),
+      onFinished: (summary) => this.showResults(summary),
     });
     this.menu = new Menu(
       container,
@@ -68,6 +70,33 @@ export class App {
       },
       this.settings,
     );
+    this.menu.onRunOptionsChange = () => this.refreshReadyRecord();
+  }
+
+  private showResults(summary: RunSummary): void {
+    const rhythm = summary.rhythm;
+    if (!rhythm) {
+      this.menu.showResults(summary, null);
+      return;
+    }
+    const key = Records.key(summary.songId, rhythm.difficulty, rhythm.obstacles && rhythm.difficulty !== 'easy');
+    const record = this.records.submit(key, {
+      score: rhythm.score.score,
+      rank: rhythm.score.rank,
+      maxCombo: rhythm.score.maxCombo,
+      date: Date.now(),
+    });
+    this.menu.showResults(summary, record);
+  }
+
+  /** Best score for the prepared song with the currently selected options. */
+  private refreshReadyRecord(): void {
+    const v = this.settings.values;
+    if (!this.prepared || v.mode !== 'rhythm') {
+      this.menu.setReadyRecord(null);
+      return;
+    }
+    this.menu.setReadyRecord(this.records.get(Records.key(this.prepared.songId, v.difficulty, v.obstacles && v.difficulty !== 'easy')));
   }
 
   start(): void {
@@ -96,7 +125,13 @@ export class App {
     setUrlSeed(seed);
     // Creating the audio context here, inside the click, satisfies autoplay policies.
     if (music) this.audio.getContext();
-    this.game.startRun({ seed, interactive: true, music: music ?? undefined });
+    const v = this.settings.values;
+    this.game.startRun({
+      seed,
+      interactive: true,
+      music: music ?? undefined,
+      rhythm: music && v.mode === 'rhythm' ? { difficulty: v.difficulty, obstacles: v.obstacles } : undefined,
+    });
   }
 
   private async loadFile(file: File): Promise<void> {
@@ -124,8 +159,10 @@ export class App {
         if (key) void this.cache.put(key, analysis);
       }
       if (id !== this.loadId) return;
-      this.prepared = { buffer, analysis, title };
+      // Content hash identifies the song for records; fall back to name and length.
+      this.prepared = { buffer, analysis, title, songId: key ?? `file:${title}:${buffer.duration.toFixed(1)}` };
       this.menu.showReady(title, analysis, this.initialSeed ?? randomSeed(), cached !== null);
+      this.refreshReadyRecord();
     } catch (error) {
       if (id !== this.loadId) return;
       console.error(error);
@@ -149,8 +186,9 @@ export class App {
       if (id !== this.loadId) return;
       const buffer = context.createBuffer(1, result.samples.length, result.sampleRate);
       buffer.copyToChannel(result.samples as Float32Array<ArrayBuffer>, 0);
-      this.prepared = { buffer, analysis: result.analysis, title: DEMO_TITLE };
+      this.prepared = { buffer, analysis: result.analysis, title: DEMO_TITLE, songId: 'demo:v1' };
       this.menu.showReady(DEMO_TITLE, result.analysis, this.initialSeed ?? randomSeed(), false);
+      this.refreshReadyRecord();
     } catch (error) {
       if (id !== this.loadId) return;
       console.error(error);

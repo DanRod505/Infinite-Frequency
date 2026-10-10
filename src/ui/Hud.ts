@@ -26,6 +26,14 @@ export class Hud {
   private readonly bpm: HTMLElement;
   private readonly countdown: HTMLElement;
   private readonly toast: HTMLElement;
+  private readonly scorePanel: HTMLElement;
+  private readonly scoreValue: HTMLElement;
+  private readonly multiplier: HTMLElement;
+  private readonly combo: HTMLElement;
+  private readonly judgement: HTMLElement;
+  private readonly hit: HTMLElement;
+  private shownScore = -1;
+  private shownCombo = -1;
   private debugVisible = false;
   private toastTimer = 0;
   private hintTimer = 0;
@@ -37,6 +45,12 @@ export class Hud {
     this.root.innerHTML = `
       <div class="hud-progress" data-progress hidden><div data-progress-bar></div></div>
       <div class="hud-title" data-title></div>
+      <div class="hud-score" data-score-panel hidden>
+        <div class="hud-score-value" data-score>0</div>
+        <div class="hud-score-combo"><span data-multiplier>x1</span><span data-combo></span></div>
+      </div>
+      <div class="hud-judgement" data-judgement></div>
+      <div class="hud-hit" data-hit></div>
       <div class="hud-beat" data-beat hidden><span data-beat-dot></span><span data-bpm></span></div>
       <div class="hud-speed"><span data-speed>0</span><small>km/h</small></div>
       <div class="hud-distance" data-distance>0 m</div>
@@ -62,6 +76,45 @@ export class Hud {
     this.bpm = q('[data-bpm]');
     this.countdown = q('[data-countdown]');
     this.toast = q('[data-toast]');
+    this.scorePanel = q('[data-score-panel]');
+    this.scoreValue = q('[data-score]');
+    this.multiplier = q('[data-multiplier]');
+    this.combo = q('[data-combo]');
+    this.judgement = q('[data-judgement]');
+    this.hit = q('[data-hit]');
+  }
+
+  /** Score, multiplier and combo (GDD §9.3). */
+  setScore(score: number, multiplier: number, combo: number): void {
+    if (score !== this.shownScore) {
+      this.shownScore = score;
+      this.scoreValue.textContent = score.toLocaleString('pt-BR');
+    }
+    if (combo !== this.shownCombo) {
+      this.shownCombo = combo;
+      this.multiplier.textContent = `x${multiplier}`;
+      this.multiplier.dataset.level = String(multiplier);
+      this.combo.textContent = combo >= 2 ? `${combo} combo` : '';
+    }
+  }
+
+  /** Short feedback under the horizon: collection quality, misses, bonuses. */
+  showJudgement(text: string, kind: 'perfect' | 'good' | 'special' | 'miss' | 'bonus' | 'hit'): void {
+    this.judgement.textContent = text;
+    this.judgement.dataset.kind = kind;
+    this.restartAnimation(this.judgement, 'hud-judgement--show');
+  }
+
+  /** Red edge glow on obstacle hits; a softer version with reduced flashes. */
+  flashHit(reduced: boolean): void {
+    this.hit.classList.toggle('hud-hit--soft', reduced);
+    this.restartAnimation(this.hit, 'hud-hit--show');
+  }
+
+  private restartAnimation(element: HTMLElement, className: string): void {
+    element.classList.remove(className);
+    void element.offsetWidth;
+    element.classList.add(className);
   }
 
   setVisible(visible: boolean): void {
@@ -69,8 +122,11 @@ export class Hud {
   }
 
   /** Configures the HUD for a run. */
-  setRun(title: string | null, interactive: boolean): void {
+  setRun(title: string | null, interactive: boolean, scoring = false): void {
     this.title.textContent = title ?? '';
+    this.scorePanel.hidden = !scoring;
+    this.judgement.classList.remove('hud-judgement--show');
+    this.setScore(0, 1, 0);
     this.progress.hidden = title === null;
     this.beat.hidden = title === null;
     this.countdown.hidden = true;

@@ -1,5 +1,8 @@
 import { LATENCY_LIMIT_MS, type Settings, type SettingsData } from '../core/Settings';
 import type { MusicAnalysis } from '../audio/analysisTypes';
+import type { RecordEntry } from '../rhythm/Records';
+import type { RunScore } from '../rhythm/ScoreKeeper';
+import { DIFFICULTY_LABELS, type Difficulty, type GameMode } from '../rhythm/types';
 
 export interface MenuActions {
   onFile(file: File): void;
@@ -19,6 +22,14 @@ export interface RunSummary {
   distance: number;
   bpm: number;
   seed: number;
+  songId: string;
+  /** Present for Rhythm Run. */
+  rhythm?: { difficulty: Difficulty; obstacles: boolean; score: RunScore };
+}
+
+export interface RecordInfo {
+  previous: RecordEntry | null;
+  isNewBest: boolean;
 }
 
 type Screen = 'home' | 'loading' | 'ready' | 'pause' | 'results';
@@ -57,6 +68,7 @@ export class Menu {
     });
     this.setupDropZone();
     for (const panel of this.root.querySelectorAll<HTMLElement>('[data-settings]')) this.setupSettings(panel);
+    this.setupRunOptions();
   }
 
   hide(): void {
@@ -110,14 +122,47 @@ export class Menu {
     this.show('pause');
   }
 
-  showResults(summary: RunSummary): void {
+  showResults(summary: RunSummary, record: RecordInfo | null): void {
     this.el('[data-results-title]').textContent = summary.title;
-    this.el('[data-results-details]').innerHTML = `
-      <dt>Duração</dt><dd>${formatTime(summary.duration)}</dd>
-      <dt>Distância</dt><dd>${(summary.distance / 1000).toFixed(2)} km</dd>
-      <dt>Andamento</dt><dd>${summary.bpm > 0 ? `${summary.bpm.toFixed(1)} BPM` : '—'}</dd>
-      <dt>Seed</dt><dd>${summary.seed}</dd>`;
+    const scorePanel = this.el('[data-results-score]');
+    const rhythm = summary.rhythm;
+    const rows: string[] = [];
+    if (rhythm) {
+      const r = rhythm.score;
+      scorePanel.hidden = false;
+      const rank = this.el('[data-rank]');
+      rank.textContent = r.rank;
+      rank.dataset.rank = r.rank;
+      this.el('[data-points]').textContent = r.score.toLocaleString('pt-BR');
+      const recordLine = this.el('[data-record]');
+      if (record?.isNewBest) recordLine.textContent = record.previous ? `Novo recorde! (anterior: ${record.previous.score.toLocaleString('pt-BR')})` : 'Primeiro recorde!';
+      else if (record?.previous) recordLine.textContent = `Recorde: ${record.previous.score.toLocaleString('pt-BR')} (${record.previous.rank})`;
+      else recordLine.textContent = '';
+      recordLine.classList.toggle('results-record--new', Boolean(record?.isNewBest));
+      rows.push(
+        `<dt>Dificuldade</dt><dd>${DIFFICULTY_LABELS[rhythm.difficulty]}${rhythm.obstacles && rhythm.difficulty !== 'easy' ? ' · com obstáculos' : ''}</dd>`,
+        `<dt>Notas</dt><dd>${r.collected} / ${r.totalNotes} <small>(${percent(r.totalNotes > 0 ? r.collected / r.totalNotes : 0)})</small></dd>`,
+        `<dt>Perfeitas</dt><dd>${r.perfects}</dd>`,
+        `<dt>Maior combo</dt><dd>${r.maxCombo}</dd>`,
+        `<dt>Precisão</dt><dd>${percent(r.precision)} <small>(estimada)</small></dd>`,
+        `<dt>Colisões</dt><dd>${r.obstaclesHit}</dd>`,
+      );
+    } else {
+      scorePanel.hidden = true;
+    }
+    rows.push(
+      `<dt>Duração</dt><dd>${formatTime(summary.duration)}</dd>`,
+      `<dt>Distância</dt><dd>${(summary.distance / 1000).toFixed(2)} km</dd>`,
+      `<dt>Andamento</dt><dd>${summary.bpm > 0 ? `${summary.bpm.toFixed(1)} BPM` : '—'}</dd>`,
+      `<dt>Seed</dt><dd>${summary.seed}</dd>`,
+    );
+    this.el('[data-results-details]').innerHTML = rows.join('');
     this.show('results');
+  }
+
+  /** Shows the best score for the current song and options on the ready screen. */
+  setReadyRecord(entry: RecordEntry | null): void {
+    this.el('[data-ready-record]').textContent = entry ? `Recorde: ${entry.score.toLocaleString('pt-BR')} (${entry.rank})` : '';
   }
 
   private show(screen: Screen): void {
@@ -179,6 +224,36 @@ export class Menu {
     });
   }
 
+  /** Mode, difficulty and obstacles on the ready screen, persisted with the settings. */
+  private setupRunOptions(): void {
+    const panel = this.el('[data-run-options]');
+    const inputs = panel.querySelectorAll<HTMLInputElement>('input[name]');
+    const render = (data: Readonly<SettingsData>) => {
+      for (const input of inputs) {
+        if (input.name === 'mode') input.checked = input.value === data.mode;
+        else if (input.name === 'difficulty') input.checked = input.value === data.difficulty;
+        else if (input.name === 'obstacles') {
+          input.checked = data.obstacles;
+          input.disabled = data.difficulty === 'easy';
+        }
+      }
+      for (const element of panel.querySelectorAll<HTMLElement>('[data-rhythm-only]')) element.hidden = data.mode !== 'rhythm';
+      this.onRunOptionsChange?.();
+    };
+    for (const input of inputs) {
+      input.addEventListener('change', () => {
+        if (input.name === 'mode') this.settings.update({ mode: input.value as GameMode });
+        else if (input.name === 'difficulty') this.settings.update({ difficulty: input.value as Difficulty });
+        else if (input.name === 'obstacles') this.settings.update({ obstacles: input.checked });
+      });
+    }
+    render(this.settings.values);
+    this.settings.subscribe(render);
+  }
+
+  /** Called when mode, difficulty or obstacles change (to refresh the record line). */
+  onRunOptionsChange: (() => void) | null = null;
+
   private setupSettings(panel: HTMLElement): void {
     panel.innerHTML = SETTINGS_TEMPLATE;
     const inputs = panel.querySelectorAll<HTMLInputElement>('input[name]');
@@ -207,6 +282,10 @@ export class Menu {
     if (!element) throw new Error(`Menu element ${selector} missing`);
     return element;
   }
+}
+
+function percent(value: number): string {
+  return `${Math.round(value * 100)}%`;
 }
 
 export function randomSeed(): number {
@@ -255,6 +334,21 @@ const TEMPLATE = `
   <section class="menu-card" data-screen="ready" hidden>
     <h2 data-ready-title></h2>
     <dl class="menu-details" data-ready-details></dl>
+    <div class="run-options" data-run-options>
+      <fieldset class="segmented">
+        <legend>Modo</legend>
+        <label><input type="radio" name="mode" value="rhythm" /><span>Rhythm Run<small>notas, combos e pontuação</small></span></label>
+        <label><input type="radio" name="mode" value="free" /><span>Free Ride<small>só a música e a estrada</small></span></label>
+      </fieldset>
+      <fieldset class="segmented" data-rhythm-only>
+        <legend>Dificuldade</legend>
+        <label><input type="radio" name="difficulty" value="easy" /><span>Fácil</span></label>
+        <label><input type="radio" name="difficulty" value="normal" /><span>Normal</span></label>
+        <label><input type="radio" name="difficulty" value="hard" /><span>Difícil</span></label>
+      </fieldset>
+      <label class="check" data-rhythm-only data-obstacles-option><input type="checkbox" name="obstacles" /> Obstáculos <small>(Normal e Difícil)</small></label>
+      <p class="record-line" data-ready-record></p>
+    </div>
     <label class="seed">Seed do percurso
       <span><input type="number" min="0" step="1" data-seed /><button data-action="random-seed" title="Seed aleatória">🎲</button></span>
     </label>
@@ -277,6 +371,13 @@ const TEMPLATE = `
   <section class="menu-card" data-screen="results" hidden>
     <h2>Música concluída</h2>
     <p class="menu-subtitle" data-results-title></p>
+    <div class="results-score" data-results-score hidden>
+      <div class="rank" data-rank></div>
+      <div>
+        <div class="results-points" data-points></div>
+        <div class="results-record" data-record></div>
+      </div>
+    </div>
     <dl class="menu-details" data-results-details></dl>
     <div class="menu-row">
       <button class="primary" data-action="restart">Repetir percurso</button>

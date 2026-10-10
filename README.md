@@ -4,7 +4,7 @@ Jogo 3D de corrida musical para navegador: o veículo percorre estradas e cenár
 
 **Jogar no navegador:** https://danrod505.github.io/Infinite-Frequency/
 
-## Estado atual — Fase 2: integração musical
+## Estado atual — Fase 3: jogabilidade rítmica
 
 Seguindo a diretriz do GDD (§18), o desenvolvimento avança pelos fundamentos. Fases concluídas:
 
@@ -39,6 +39,25 @@ Também incluídos:
 - **Cache de análises** em IndexedDB, indexado pelo SHA-256 do arquivo: a mesma música abre instantaneamente na segunda vez.
 - **Acessibilidade (§12.4)**: volume, intensidade dos efeitos, redução de flashes, tremor de câmera desligável e ajuste de latência — tudo salvo no navegador.
 - **Telas**: menu principal, progresso da análise, resumo da música (duração, BPM com confiança, seções, drops), pausa e fim da música (repetir percurso, nova variação, outra música).
+
+### Fase 3 — jogabilidade rítmica
+
+| Entrega | Implementação |
+|---|---|
+| Coletáveis | Gemas luminosas nas batidas detectadas; notas especiais (douradas) nos drops e no início das seções intensas |
+| Padrões | Sequências rítmicas (linha, zigue-zague, varredura, onda, escada) que pedem movimento contínuo |
+| Validador | Cada nota é alcançável a partir da anterior com folga para a capacidade lateral do carro; obstáculos só onde a rota entre as notas fica livre |
+| Colisões | Barreiras listradas de vermelho (Normal/Difícil, opcionais): quebram o combo e tiram 150 pontos, sem encerrar a corrida |
+| Combos | Multiplicador x1 (0–9), x2 (10–24), x3 (25–49), x4 (50+); perder uma nota zera o combo |
+| Pontuação | Perfeita 100, boa 70, especial 250/180, bônus de 30 por nota em sequência completa |
+| Resultados | Pontuação, classificação S–D, notas coletadas, perfeitas, maior combo, precisão, colisões e recorde anterior |
+
+Também incluídos:
+
+- **Modos (GDD §7):** **Rhythm Run** (competitivo) e **Free Ride** (só música e estrada, sem notas nem obstáculos).
+- **Dificuldades (D06):** Fácil, Normal e Difícil mudam a densidade de notas, a amplitude dos padrões, a folga exigida e a presença de obstáculos.
+- **Recordes locais** por música, dificuldade e obstáculos, salvos no navegador.
+- **Pontuação consistente:** cada nota é julgada no passo fixo da simulação em que o carro cruza sua distância, então o mesmo percurso jogado do mesmo jeito dá sempre a mesma pontuação.
 
 ### Controles
 
@@ -88,8 +107,11 @@ src/
   world/     Environment (céu, sol, névoa, grade, luzes, partículas)
   ui/        Menu e HUD em DOM
   game/      Game (sessão), GameDirector (música → parâmetros visuais), runTiming
+  rhythm/    ChartGenerator (notas, padrões, validador, obstáculos), RhythmSystem
+             (julgamento), ScoreKeeper (pontos e combos), RhythmRenderer, Records
 tests/       determinismo, continuidade, restrições geométricas, controlador,
-             análise musical contra gabarito, linha temporal e sincronização
+             análise musical contra gabarito, linha temporal, sincronização,
+             partitura, jogabilidade (piloto robô), pontuação e recordes
 ```
 
 Pipeline (GDD §11.3): **arquivo → análise (worker) → linha temporal → geração de pista e cenário → execução sincronizada → resultados.**
@@ -116,6 +138,14 @@ O **áudio é o relógio mestre**. A posição da música considera a latência 
 
 O carro parte do repouso 3 s antes da música e já está em velocidade de cruzeiro quando ela começa. Assim, a distância percorrida em cada instante da música é determinística (`runTiming.ts`) — base para posicionar os coletáveis na Fase 3.
 
+### Coletáveis e jogabilidade (GDD §6)
+
+A distância de cada nota vem do instante musical (`runTiming.ts`): o carro passa por ela exatamente quando a batida toca. Coletar é uma questão de posição lateral: a nota é julgada no passo fixo da simulação em que o carro cruza sua distância, usando a posição lateral interpolada no cruzamento.
+
+Nos testes, um **piloto robô** joga a faixa demo e trilhas de 90 e 150 BPM em todas as dificuldades. Ele coleta 100% das notas e não bate em nenhum obstáculo, tanto com direção analógica quanto com direção digital como a de um teclado (só esquerda, direita ou nada). Isso garante as exigências do §12.1: padrões executáveis e nenhum obstáculo inevitável.
+
+**Sem redução de velocidade nas colisões (D05):** a velocidade constante é o que mantém as notas sincronizadas com a música. A penalidade é perder o combo e 150 pontos, com tremor e um brilho vermelho nas bordas da tela.
+
 ### Geração da pista (GDD §4)
 
 Em vez de ajustar splines independentes por segmento, o eixo central é **integrado** a partir de curvatura (guinada) e inclinação (pitch), cujas taxas de variação são limitadas — transições do tipo clotoide. Isso garante por construção:
@@ -134,17 +164,21 @@ Todos os parâmetros ficam em `src/track/TrackConfig.ts`.
 - **D01 — Controle:** direção lateral contínua implementada como modelo principal.
 - **D02 — Velocidade:** fixa por enquanto (cruzeiro de 55 m/s ≈ 198 km/h, configurável em `VehicleTuning`). Velocidade constante simplifica a relação tempo ↔ distância para os coletáveis.
 - **D03 — Música:** qualquer formato que o navegador decodifique (MP3 e WAV garantidos), de 10 s a 20 min e até 200 MB; análise completa antes da corrida, em worker.
+- **D05 — Colisões:** quebram o combo e tiram 150 pontos, com efeito visual; sem redução de velocidade (manteria as notas fora de sincronia) e sem encerrar a corrida.
+- **D06 — Dificuldade:** três níveis com densidade, amplitude, folga e obstáculos próprios (`DIFFICULTY_PRESETS` em `src/rhythm/types.ts`).
 - **D04 — Geração:** a música só modula o quão "viva" é a pista (proporção de retas, amplitude das curvas), nunca os limites geométricos. Curvas não são disparadas por batidas.
 - **D07 — Cenários:** atmosfera Neon Dreams, agora reativa à música.
 - **D09 — Persistência:** análises no IndexedDB (até 20, pelo hash do arquivo); configurações no localStorage; seed na URL.
 - **React** (previsto no GDD §11.1) ainda não foi adotado: menus e HUD são DOM simples. Entra com os menus completos da Fase 5.
 
-## Próximos passos (Fase 3 — jogabilidade rítmica)
+## Próximos passos (Fase 4 — cenário procedural)
 
-Coletáveis posicionados nas batidas (distância derivada do tempo da música), padrões validados pela capacidade lateral do veículo, combos, pontuação e tela de resultados com recordes.
+Bioma Neon Dreams completo (montanhas geométricas, estruturas neon, objetos procedurais instanciados), iluminação dinâmica, partículas, eventos ambientais nos drops e transições entre seções.
 
 Pontos técnicos já identificados:
 
-- **Origem flutuante:** as posições crescem com a distância (~6,6 km numa música de 2 min); em sessões muito longas, rebasear a origem do mundo evitará perda de precisão em float32.
-- **Pós-processamento** (bloom) ainda fora, para preservar desempenho.
-- **Andamento variável:** o rastreador acompanha pequenas variações, mas o BPM exibido é global; músicas com mudanças bruscas de andamento são o próximo ponto de robustez da análise.
+- **Balanceamento:** valores de pontuação, folgas e densidade por dificuldade são provisórios (o GDD prevê ajuste em testes) e ficam todos em `src/rhythm/types.ts`.
+- **Sons de coleta:** a coleta tem retorno visual; um som discreto ajudaria, mas precisa ser equilibrado com a música.
+- **Sensibilidade da direção (§12.4):** ainda não configurável.
+- **Origem flutuante:** as posições crescem com a distância; em sessões muito longas, rebasear a origem do mundo evitará perda de precisão em float32.
+- **Andamento variável:** o rastreador acompanha pequenas variações, mas músicas com mudanças bruscas de andamento são o próximo ponto de robustez da análise.
