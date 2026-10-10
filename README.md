@@ -2,6 +2,8 @@
 
 Jogo 3D de corrida musical para navegador: o veículo percorre estradas e cenários gerados proceduralmente, sincronizados com a música escolhida. O documento de concepção completo está em [`docs/GDD.md`](docs/GDD.md).
 
+**Jogar no navegador:** https://danrod505.github.io/Infinite-Frequency/
+
 ## Estado atual — Fase 2: integração musical
 
 Seguindo a diretriz do GDD (§18), o desenvolvimento avança pelos fundamentos. Fases concluídas:
@@ -63,6 +65,12 @@ npm test           # testes (Vitest)
 npm run typecheck  # verificação de tipos
 npm run build      # build de produção em dist/
 ```
+
+### Publicação no GitHub Pages
+
+O workflow `.github/workflows/deploy-pages.yml` roda os testes, gera o build e publica o site a cada push em `main` ou `claude/inspiring-turing-tn0pf0` (ou manualmente, pela aba Actions). Na primeira vez, é preciso ativar o Pages no repositório: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+
+O build usa caminhos relativos (`base: './'`), então funciona no subcaminho `/Infinite-Frequency/` sem configuração extra.
 
 > O `.npmrc` ativa `legacy-peer-deps` para contornar um bug do npm 10 ao resolver as peer dependencies opcionais do Vitest.
 
