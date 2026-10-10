@@ -72,7 +72,15 @@ export class ChaseCamera {
    * @param aheadPoint world point ahead on the road the camera should look at
    * @param speedRatio current speed / cruise speed, in [0, 1]
    */
-  update(dt: number, vehiclePosition: Vector3, frame: TrackFrame, aheadPoint: Vector3, speedRatio: number): void {
+  update(
+    dt: number,
+    vehiclePosition: Vector3,
+    frame: TrackFrame,
+    aheadPoint: Vector3,
+    speedRatio: number,
+    /** Extra field of view in degrees (music intensity). */
+    fovBoost = 0,
+  ): void {
     const s = this.settings;
 
     this.desired
@@ -108,7 +116,7 @@ export class ChaseCamera {
     this.camera.up.copy(this.up);
     this.camera.lookAt(this.target);
 
-    const fov = s.baseFov + s.speedFov * clamp(speedRatio, 0, 1);
+    const fov = s.baseFov + s.speedFov * clamp(speedRatio, 0, 1) + fovBoost;
     if (Math.abs(fov - this.camera.fov) > 0.01) {
       this.camera.fov = fov;
       this.camera.updateProjectionMatrix();

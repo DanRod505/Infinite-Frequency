@@ -22,6 +22,7 @@ export class VehicleModel {
   private readonly underglow: Mesh<PlaneGeometry, MeshBasicMaterial>;
   private readonly geometries: BufferGeometry[] = [];
   private readonly materials: Material[] = [];
+  private pulse = 0;
 
   constructor() {
     this.root.name = 'Vehicle';
@@ -88,7 +89,12 @@ export class VehicleModel {
 
     const spin = (speed / 0.36) * dt;
     for (const wheel of this.wheels) wheel.rotation.x -= spin;
-    this.underglow.material.opacity = 0.35 + 0.1 * Math.sin(time * 4);
+    this.underglow.material.opacity = 0.3 + 0.08 * Math.sin(time * 4) + 0.45 * this.pulse;
+  }
+
+  /** Music pulse in [0, 1] for the underglow. */
+  setPulse(pulse: number): void {
+    this.pulse = pulse;
   }
 
   dispose(): void {

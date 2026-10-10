@@ -1,5 +1,9 @@
 import {
+  AdditiveBlending,
   AmbientLight,
+  BufferAttribute,
+  BufferGeometry,
+  CanvasTexture,
   BackSide,
   Color,
   DirectionalLight,
@@ -10,11 +14,32 @@ import {
   Mesh,
   MeshBasicMaterial,
   PlaneGeometry,
+  Points,
+  PointsMaterial,
   ShaderMaterial,
   SphereGeometry,
   type Scene,
   type Vector3,
 } from 'three';
+import { Rng } from '../core/rng';
+import type { MusicVisualState } from '../game/GameDirector';
+
+/** Sky and fog palettes blended by musical intensity (GDD §5.3, §9.2). */
+const CALM = {
+  top: new Color(0x090018),
+  middle: new Color(0x3a0b5c),
+  horizon: new Color(0xff3c8e),
+  fog: new Color(0x1a0630),
+};
+const INTENSE = {
+  top: new Color(0x16002e),
+  middle: new Color(0x7a0f74),
+  horizon: new Color(0xff7a45),
+  fog: new Color(0x2e0a3c),
+};
+
+const SPARKLE_COUNT = 500;
+const SPARKLE_BOX = { x: 160, y: 50, z: 260 };
 
 /**
  * Minimal Neon Dreams-style atmosphere for the driving prototype (GDD §5.2).
@@ -26,17 +51,23 @@ export class Environment {
   private readonly sun: Mesh<PlaneGeometry, ShaderMaterial>;
   private readonly grid: GridHelper;
   private readonly floor: Mesh<PlaneGeometry, MeshBasicMaterial>;
+  private readonly sparkles: Points<BufferGeometry, PointsMaterial>;
+  private readonly sparkleOffsets: Float32Array;
+  private readonly hemisphere: HemisphereLight;
+  private readonly fog: Fog;
+  private readonly gridMaterials: { opacity: number }[];
   private readonly gridCell = 20;
   private readonly gridLevel = -45;
 
   constructor(scene: Scene) {
     this.group.name = 'Environment';
-    const fogColor = new Color(0x1a0630);
-    scene.background = fogColor;
-    scene.fog = new Fog(fogColor, 120, 850);
+    this.fog = new Fog(CALM.fog.clone(), 120, 850);
+    scene.background = this.fog.color;
+    scene.fog = this.fog;
 
     this.group.add(new AmbientLight(0x6a4c9c, 0.6));
-    this.group.add(new HemisphereLight(0xff6ad5, 0x1a0630, 0.9));
+    this.hemisphere = new HemisphereLight(0xff6ad5, 0x1a0630, 0.9);
+    this.group.add(this.hemisphere);
     const key = new DirectionalLight(0xffd1f5, 1.2);
     key.position.set(-30, 80, 40);
     this.group.add(key);
@@ -48,9 +79,9 @@ export class Environment {
         depthWrite: false,
         fog: false,
         uniforms: {
-          top: { value: new Color(0x090018) },
-          middle: { value: new Color(0x3a0b5c) },
-          horizon: { value: new Color(0xff3c8e) },
+          top: { value: CALM.top.clone() },
+          middle: { value: CALM.middle.clone() },
+          horizon: { value: CALM.horizon.clone() },
         },
         vertexShader: /* glsl */ `
           varying vec3 vDir;
@@ -119,7 +150,33 @@ export class Environment {
       material.transparent = true;
       material.opacity = 0.55;
     }
+    this.gridMaterials = gridMaterials;
     this.group.add(this.grid);
+
+    // Floating sparkles around the camera, driven by high frequencies.
+    const rng = new Rng(0xc0ffee);
+    this.sparkleOffsets = new Float32Array(SPARKLE_COUNT * 3);
+    for (let i = 0; i < SPARKLE_COUNT; i++) {
+      this.sparkleOffsets[i * 3] = rng.range(-1, 1) * SPARKLE_BOX.x;
+      this.sparkleOffsets[i * 3 + 1] = rng.range(0.08, 1) * SPARKLE_BOX.y;
+      this.sparkleOffsets[i * 3 + 2] = rng.range(-1, 1) * SPARKLE_BOX.z;
+    }
+    const sparkleGeometry = new BufferGeometry();
+    sparkleGeometry.setAttribute('position', new BufferAttribute(new Float32Array(SPARKLE_COUNT * 3), 3));
+    this.sparkles = new Points(
+      sparkleGeometry,
+      new PointsMaterial({
+        color: 0x9ff8ff,
+        map: createGlowTexture(),
+        size: 0.5,
+        transparent: true,
+        opacity: 0.4,
+        blending: AdditiveBlending,
+        depthWrite: false,
+      }),
+    );
+    this.sparkles.frustumCulled = false;
+    this.group.add(this.sparkles);
 
     scene.add(this.group);
   }
@@ -135,6 +192,39 @@ export class Environment {
     const snap = (value: number) => Math.round(value / this.gridCell) * this.gridCell;
     this.grid.position.set(snap(cameraPosition.x), this.gridLevel, snap(cameraPosition.z));
     this.floor.position.set(cameraPosition.x, this.gridLevel - 0.5, cameraPosition.z);
+
+    // Sparkles live in a box that wraps around the camera, so they stream past endlessly.
+    const positions = this.sparkles.geometry.getAttribute('position') as BufferAttribute;
+    const wrap = (value: number, size: number) => ((((value + size) % (2 * size)) + 2 * size) % (2 * size)) - size;
+    for (let i = 0; i < SPARKLE_COUNT; i++) {
+      const o = i * 3;
+      positions.setXYZ(
+        i,
+        cameraPosition.x + wrap(this.sparkleOffsets[o] - cameraPosition.x, SPARKLE_BOX.x),
+        cameraPosition.y + this.sparkleOffsets[o + 1],
+        cameraPosition.z + wrap(this.sparkleOffsets[o + 2] - cameraPosition.z, SPARKLE_BOX.z),
+      );
+    }
+    positions.needsUpdate = true;
+  }
+
+  /** Applies the music-driven state (palette, pulses, particles). */
+  applyMusic(music: MusicVisualState): void {
+    const t = Math.min(1, Math.max(0, (music.intensity - 0.3) / 0.6));
+    const u = this.sky.material.uniforms;
+    (u.top.value as Color).lerpColors(CALM.top, INTENSE.top, t);
+    (u.middle.value as Color).lerpColors(CALM.middle, INTENSE.middle, t);
+    (u.horizon.value as Color).lerpColors(CALM.horizon, INTENSE.horizon, t);
+    this.fog.color.lerpColors(CALM.fog, INTENSE.fog, t);
+
+    this.sun.scale.setScalar(1 + 0.1 * music.bass + 0.04 * music.beatPulse);
+    const gridOpacity = Math.min(1, 0.3 + 0.35 * music.bass + 0.35 * music.beatPulse);
+    for (const material of this.gridMaterials) material.opacity = gridOpacity;
+    this.hemisphere.intensity = 0.7 + 0.6 * music.mid;
+
+    const sparkle = this.sparkles.material;
+    sparkle.opacity = Math.min(1, 0.15 + 0.85 * music.high);
+    sparkle.size = 0.35 + 0.6 * music.high;
   }
 
   dispose(): void {
@@ -145,5 +235,26 @@ export class Environment {
     this.floor.geometry.dispose();
     this.floor.material.dispose();
     this.grid.dispose();
+    this.sparkles.geometry.dispose();
+    this.sparkles.material.map?.dispose();
+    this.sparkles.material.dispose();
   }
+}
+
+/** Soft round sprite so points read as glowing dots rather than squares. */
+function createGlowTexture(): CanvasTexture {
+  const size = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    gradient.addColorStop(0, 'rgba(255,255,255,1)');
+    gradient.addColorStop(0.25, 'rgba(255,255,255,0.8)');
+    gradient.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, size, size);
+  }
+  return new CanvasTexture(canvas);
 }

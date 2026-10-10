@@ -58,6 +58,11 @@ export class TrackRenderer {
     });
   }
 
+  /** Music-driven glow of the road lines (beat pulses). */
+  setGlow(beatPulse: number, intensity: number): void {
+    this.roadMaterial.emissiveIntensity = 0.85 + 1.0 * beatPulse + 0.35 * intensity;
+  }
+
   get activeChunkCount(): number {
     return this.active.size;
   }

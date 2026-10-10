@@ -148,3 +148,34 @@ describe('TrackGenerator', () => {
     expect(() => gen.sampleFrame(10, new TrackFrame())).toThrow();
   });
 });
+
+describe('TrackGenerator with musical intensity', () => {
+  const maxAbsCurvature = (gen: TrackGenerator, chunks: number) => {
+    let mean = 0;
+    let n = 0;
+    for (let i = 1; i <= chunks; i++) {
+      const s = gen.getChunk(i)!.samples;
+      for (let j = 0; j < gen.getChunk(i)!.sampleCount; j++, n++) mean += Math.abs(s[j * SAMPLE_STRIDE + K]);
+    }
+    return mean / n;
+  };
+
+  it('stays deterministic and within limits, with calmer curves at low intensity', () => {
+    const calm = new TrackGenerator(21, {}, () => 0);
+    const intense = new TrackGenerator(21, {}, () => 1);
+    const again = new TrackGenerator(21, {}, () => 0);
+    calm.ensureChunk(CHUNKS);
+    intense.ensureChunk(CHUNKS);
+    again.ensureChunk(CHUNKS);
+    expect(Array.from(again.getChunk(CHUNKS)!.samples)).toEqual(Array.from(calm.getChunk(CHUNKS)!.samples));
+    expect(maxAbsCurvature(calm, CHUNKS)).toBeLessThan(maxAbsCurvature(intense, CHUNKS) * 0.8);
+    for (const gen of [calm, intense]) {
+      for (let i = 0; i <= CHUNKS; i++) {
+        const s = gen.getChunk(i)!.samples;
+        for (let j = 0; j < gen.getChunk(i)!.sampleCount; j++) {
+          expect(Math.abs(s[j * SAMPLE_STRIDE + K])).toBeLessThanOrEqual(gen.config.maxCurvature + 1e-12);
+        }
+      }
+    }
+  });
+});

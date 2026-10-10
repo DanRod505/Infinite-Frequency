@@ -1,20 +1,16 @@
 import './style.css';
-import { Game } from './game/Game';
+import { App } from './App';
 import { hashSeed } from './core/rng';
 
-function readSeed(): number {
+/** Optional `?seed=` from the URL; numeric seeds are used as-is, others hashed. */
+function readSeed(): number | null {
   const param = new URLSearchParams(window.location.search).get('seed');
-  if (param === null || param === '') return hashSeed(`${Date.now()}-${Math.random()}`);
-  // Numeric seeds are used as-is so shared URLs stay readable; anything else is hashed.
+  if (param === null || param === '') return null;
   return /^\d+$/.test(param) ? Number(param) >>> 0 : hashSeed(param);
 }
 
 const container = document.getElementById('app');
 if (!container) throw new Error('#app container not found');
 
-const game = new Game(container, readSeed());
-game.start();
-
-if (import.meta.hot) {
-  import.meta.hot.dispose(() => game.dispose());
-}
+const app = new App(container, readSeed());
+app.start();

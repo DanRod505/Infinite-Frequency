@@ -1,5 +1,5 @@
 /** Keyboard input (GDD §2.2). */
-export type Action = 'left' | 'right' | 'special' | 'pause' | 'newSeed' | 'debug';
+export type Action = 'left' | 'right' | 'special' | 'pause' | 'newSeed' | 'debug' | 'latencyDown' | 'latencyUp';
 
 const BINDINGS: Record<string, Action> = {
   KeyA: 'left',
@@ -10,6 +10,8 @@ const BINDINGS: Record<string, Action> = {
   Escape: 'pause',
   KeyN: 'newSeed',
   F3: 'debug',
+  BracketLeft: 'latencyDown',
+  BracketRight: 'latencyUp',
 };
 
 export class Input {
@@ -42,9 +44,17 @@ export class Input {
     return (this.isHeld('right') ? 1 : 0) - (this.isHeld('left') ? 1 : 0);
   }
 
+  /** Clears pending presses (e.g. when gameplay starts after a menu). */
+  clearPressed(): void {
+    this.pressed.clear();
+  }
+
   private onKeyDown = (event: KeyboardEvent): void => {
     const action = BINDINGS[event.code];
     if (!action) return;
+    // Let form controls in menus keep their keyboard behaviour.
+    const target = event.target as HTMLElement | null;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'BUTTON') && action !== 'pause') return;
     event.preventDefault();
     if (!event.repeat) this.pressed.add(action);
     this.held.add(action);

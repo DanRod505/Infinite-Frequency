@@ -74,7 +74,16 @@ export class TrackGenerator {
   private firstIndex = 0;
   private state: GeneratorState = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, curvature: 0 };
 
-  constructor(seed: number, config: Partial<TrackConfig> = {}) {
+  /**
+   * @param intensityAt optional musical intensity in [0, 1] along the track.
+   * It only scales how lively curves are; every geometric limit still holds,
+   * so the music can never produce a dangerous curve (GDD §4.3).
+   */
+  constructor(
+    seed: number,
+    config: Partial<TrackConfig> = {},
+    private readonly intensityAt: ((distance: number) => number) | null = null,
+  ) {
     this.seed = seed >>> 0;
     this.config = { ...DEFAULT_TRACK_CONFIG, ...config };
     this.chunkLength = chunkLength(this.config);
@@ -164,10 +173,17 @@ export class TrackGenerator {
     const c = this.config;
     const st = this.state;
 
+    // Calm music favours straights and gentle curves; intense music livelier ones.
+    const intensity = this.intensityAt
+      ? clamp(this.intensityAt((this.nextIndex + 0.5) * this.chunkLength), 0, 1)
+      : 1;
+    const straightProbability = Math.min(0.9, c.straightProbability + 0.3 * (1 - intensity));
+    const liveliness = 0.5 + 0.5 * intensity;
+
     let targetCurvature = 0;
-    if (!rng.chance(c.straightProbability)) {
+    if (!rng.chance(straightProbability)) {
       // Prefer gentle curves; tight curves are rarer.
-      const magnitude = c.maxCurvature * (0.25 + 0.75 * rng.next() * rng.next());
+      const magnitude = c.maxCurvature * liveliness * (0.25 + 0.75 * rng.next() * rng.next());
       targetCurvature = magnitude * rng.sign();
     }
 
