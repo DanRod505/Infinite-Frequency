@@ -23,12 +23,15 @@ export class VehicleModel {
   private readonly geometries: BufferGeometry[] = [];
   private readonly materials: Material[] = [];
   private pulse = 0;
+  private readonly paint: MeshStandardMaterial;
+  private readonly rim: MeshStandardMaterial;
 
   constructor() {
     this.root.name = 'Vehicle';
     this.root.add(this.body);
 
     const paint = this.track(new MeshStandardMaterial({ color: 0x3a2f6b, metalness: 0.6, roughness: 0.3 }));
+    this.paint = paint;
     const trim = this.track(
       new MeshStandardMaterial({ color: 0x0a0a12, emissive: 0x00e5ff, emissiveIntensity: 1.6, roughness: 0.4 }),
     );
@@ -37,6 +40,7 @@ export class VehicleModel {
     const head = this.track(new MeshBasicMaterial({ color: 0xe8faff }));
     const tyre = this.track(new MeshStandardMaterial({ color: 0x050505, roughness: 0.9 }));
     const rim = this.track(new MeshStandardMaterial({ color: 0x111111, emissive: 0xff2ad4, emissiveIntensity: 0.8 }));
+    this.rim = rim;
 
     // Body: low wedge built from boxes. Forward is -Z.
     this.addBox(2.0, 0.45, 4.4, 0, 0.55, 0, paint);
@@ -90,6 +94,13 @@ export class VehicleModel {
     const spin = (speed / 0.36) * dt;
     for (const wheel of this.wheels) wheel.rotation.x -= spin;
     this.underglow.material.opacity = 0.25 + 0.06 * Math.sin(time * 4) + 0.3 * this.pulse;
+  }
+
+  /** Garage colours (GDD §8.2): body paint, and the underglow with matching rims. */
+  setColors(body: number, glow: number): void {
+    this.paint.color.setHex(body);
+    this.underglow.material.color.setHex(glow);
+    this.rim.emissive.setHex(glow);
   }
 
   /** Music pulse in [0, 1] for the underglow. */

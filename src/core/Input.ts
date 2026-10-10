@@ -17,17 +17,25 @@ const BINDINGS: Record<string, Action> = {
 export class Input {
   private readonly held = new Set<Action>();
   private readonly pressed = new Set<Action>();
+  /** Active pointers (touch or mouse) held on the game canvas, by side. */
+  private readonly pointers = new Map<number, 'left' | 'right'>();
 
   constructor(private readonly target: Window = window) {
     target.addEventListener('keydown', this.onKeyDown);
     target.addEventListener('keyup', this.onKeyUp);
     target.addEventListener('blur', this.onBlur);
+    target.addEventListener('pointerdown', this.onPointerDown);
+    target.addEventListener('pointerup', this.onPointerUp);
+    target.addEventListener('pointercancel', this.onPointerUp);
   }
 
   dispose(): void {
     this.target.removeEventListener('keydown', this.onKeyDown);
     this.target.removeEventListener('keyup', this.onKeyUp);
     this.target.removeEventListener('blur', this.onBlur);
+    this.target.removeEventListener('pointerdown', this.onPointerDown);
+    this.target.removeEventListener('pointerup', this.onPointerUp);
+    this.target.removeEventListener('pointercancel', this.onPointerUp);
   }
 
   isHeld(action: Action): boolean {
@@ -41,7 +49,13 @@ export class Input {
 
   /** Digital steering axis in [-1, 1]; positive steers right. */
   steerAxis(): number {
-    return (this.isHeld('right') ? 1 : 0) - (this.isHeld('left') ? 1 : 0);
+    let left = this.isHeld('left');
+    let right = this.isHeld('right');
+    for (const side of this.pointers.values()) {
+      if (side === 'left') left = true;
+      else right = true;
+    }
+    return (right ? 1 : 0) - (left ? 1 : 0);
   }
 
   /** Clears pending presses (e.g. when gameplay starts after a menu). */
@@ -67,5 +81,17 @@ export class Input {
 
   private onBlur = (): void => {
     this.held.clear();
+    this.pointers.clear();
+  };
+
+  /** Holding the left or right half of the game view steers (touch screens, mouse). */
+  private onPointerDown = (event: Event): void => {
+    const e = event as PointerEvent;
+    if (!(e.target instanceof HTMLCanvasElement)) return;
+    this.pointers.set(e.pointerId, e.clientX < window.innerWidth / 2 ? 'left' : 'right');
+  };
+
+  private onPointerUp = (event: Event): void => {
+    this.pointers.delete((event as PointerEvent).pointerId);
   };
 }

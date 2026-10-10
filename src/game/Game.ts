@@ -11,7 +11,7 @@ import { setUrlSeed } from '../core/url';
 import { TrackFrame, TrackGenerator } from '../track/TrackGenerator';
 import { TrackRenderer } from '../track/TrackRenderer';
 import { Hud } from '../ui/Hud';
-import { randomSeed, type RunSummary } from '../ui/Menu';
+import { randomSeed, type RunSummary } from '../ui/menu/types';
 import { VehicleController, copyVehicleState, createVehicleState } from '../vehicle/VehicleController';
 import { VehicleModel } from '../vehicle/VehicleModel';
 import { Environment } from '../world/Environment';
@@ -21,6 +21,8 @@ import { SceneryRenderer } from '../world/SceneryRenderer';
 import { buildProgress, paletteAt, planWorld, type WorldPlan } from '../world/WorldPlanner';
 import { PALETTES, type PaletteName } from '../world/palettes';
 import { PostFX } from './PostFX';
+import { AdaptiveQuality, QUALITY_PRESETS, type QualityLevel } from './Quality';
+import { Sfx } from '../audio/Sfx';
 import { generateChart } from '../rhythm/ChartGenerator';
 import { RhythmRenderer } from '../rhythm/RhythmRenderer';
 import { RhythmSystem, type RhythmEvent } from '../rhythm/RhythmSystem';
@@ -92,6 +94,9 @@ export class Game {
   private worldPlan: WorldPlan | null = null;
   private paletteName: PaletteName | null = null;
   private dropPending = false;
+  private readonly sfx: Sfx;
+  private readonly adaptive = new AdaptiveQuality('high');
+  private qualityLevel: QualityLevel = 'high';
   private readonly vehicleModel = new VehicleModel();
   private readonly hud: Hud;
   private readonly director: GameDirector;
@@ -148,6 +153,9 @@ export class Game {
     );
     this.postFX = new PostFX(this.renderer, this.scene, this.chase.camera);
     this.hud = new Hud(container);
+    this.hud.onPause = () => {
+      if (this.run.interactive && !this.paused && !this.resultsShown) this.events.onPauseRequest();
+    };
 
     this.director = new GameDirector(settings.values, {
       onDrop: () => {
@@ -156,6 +164,7 @@ export class Game {
       },
       onEnd: () => this.onSongEnd(),
     });
+    this.sfx = new Sfx(() => audio.existingContext);
     this.applySettings(settings.values);
     settings.subscribe((values) => this.applySettings(values));
     // The audio clock freezes at the last *heard* instant, which can be just short
@@ -197,14 +206,15 @@ export class Game {
 
     const music = options.music;
     const timeline = music ? new MusicTimeline(music.analysis) : null;
-    this.vehicle = new VehicleController(this.generator.roadWidth, this.vehicle.tuning);
+    this.vehicle = this.createVehicle();
     this.generator = new TrackGenerator(options.seed, {}, timeline ? this.intensityProfile(timeline) : null);
     this.trackRenderer.setGenerator(this.generator);
     this.trackRenderer.update(0);
 
     // World: scenery density follows the music; events are planned from the analysis.
     const intensity = timeline ? this.intensityProfile(timeline) : () => 0.55;
-    this.scenery.setSource(this.generator, options.seed, (d) => 0.25 + 0.75 * intensity(d));
+    this.sceneryIntensity = intensity;
+    this.resetScenery();
     const tuning = this.vehicle.tuning;
     this.worldPlan = music ? planWorld(music.analysis, options.seed, (t) => distanceAtSongTime(t, tuning)) : null;
     this.worldEvents.setPlan(this.worldPlan);
@@ -348,7 +358,7 @@ export class Game {
       this.particles.triggerBurst(this.aheadPoint, palette.accentB);
     }
     this.particles.update(frameDt, s.distance, s.speed, music, palette, this.generator, effects);
-    const bloom = this.settings.values.bloom;
+    const bloom = QUALITY_PRESETS[this.qualityLevel].bloom;
     // Bloom already amplifies the drop flash, so the exposure kick is smaller with it.
     this.renderer.toneMappingExposure = 1.1 + (bloom ? 0.3 : 0.6) * music.flash;
 
@@ -369,6 +379,11 @@ export class Game {
     }
 
     if (frameDt > 0) this.fps = lerp(this.fps, 1 / frameDt, 0.05);
+    const lowered = this.adaptive.sample(frameDt);
+    if (lowered && this.settings.values.quality === 'auto') {
+      this.setQuality(lowered);
+      if (this.run.interactive) this.hud.showToast(`Qualidade gráfica reduzida para ${lowered === 'low' ? 'baixa' : 'média'}`);
+    }
     const info = this.renderer.info.render;
     const tempo = this.run.music?.analysis.tempo;
     this.hud.update({
@@ -389,6 +404,7 @@ export class Game {
         latency: `${this.settings.values.latencyMs} ms`,
         intensity: music.intensity.toFixed(2),
         palette: this.paletteName ?? '—',
+        quality: `${this.qualityLevel}${this.settings.values.quality === 'auto' ? ' (auto)' : ''}`,
       },
     });
   }
@@ -424,6 +440,8 @@ export class Game {
       this.rhythmRenderer.handleEvent(event, this.generator);
       if (event.type === 'collect') {
         const { result, note } = event;
+        if (result.bonus > 0 || note.kind === 'special') this.sfx.special();
+        else this.sfx.collect(result.quality === 'perfect');
         if (result.bonus > 0) this.hud.showJudgement(`Sequência perfeita +${result.bonus}`, 'bonus');
         else if (note.kind === 'special') this.hud.showJudgement(`Especial +${result.points}`, 'special');
         else if (result.quality === 'perfect') this.hud.showJudgement(`Perfeito +${result.points}`, 'perfect');
@@ -433,6 +451,7 @@ export class Game {
       } else {
         this.hud.showJudgement(event.penalty > 0 ? `Colisão −${event.penalty}` : 'Colisão', 'hit');
         this.hud.flashHit(this.settings.values.reduceFlashes);
+        this.sfx.hit();
         this.chase.addShake(0.8);
       }
     }
@@ -461,6 +480,36 @@ export class Game {
       songId: music.songId,
       rhythm: this.run.rhythm && this.rhythm ? { ...this.run.rhythm, score: this.rhythm.score.result() } : undefined,
     };
+  }
+
+  private sceneryIntensity: (distance: number) => number = () => 0.55;
+
+  /** (Re)streams scenery for the current track at the current quality's density. */
+  private resetScenery(): void {
+    const scale = QUALITY_PRESETS[this.qualityLevel].sceneryDensity;
+    const intensity = this.sceneryIntensity;
+    this.scenery.setSource(this.generator, this.run.seed, (d) => scale * (0.25 + 0.75 * intensity(d)));
+  }
+
+  /** Vehicle with the player's steering sensitivity (§12.4); max lateral speed is unchanged. */
+  private createVehicle(): VehicleController {
+    const base = new VehicleController(this.generator.roadWidth);
+    const k = this.settings.values.steering;
+    return new VehicleController(this.generator.roadWidth, {
+      steerResponse: base.tuning.steerResponse * k,
+      steerRelease: base.tuning.steerRelease * k,
+    });
+  }
+
+  /** Applies a quality level: resolution, bloom, scenery density and particle budgets. */
+  private setQuality(level: QualityLevel): void {
+    this.qualityLevel = level;
+    const preset = QUALITY_PRESETS[level];
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, preset.pixelRatio));
+    this.onResize();
+    this.environment.setSparkleFraction(preset.sparkles);
+    this.particles.streaksEnabled = preset.streaks;
+    this.resetScenery();
   }
 
   /** Palette for a song time: planned per section with music, rotating slowly without. */
@@ -498,6 +547,11 @@ export class Game {
   }
 
   private applySettings(values: Readonly<SettingsData>): void {
+    this.sfx.setVolume(values.sfxVolume);
+    this.vehicleModel.setColors(values.bodyColor, values.glowColor);
+    const wanted: QualityLevel = values.quality === 'auto' ? this.adaptive.level : values.quality;
+    if (values.quality !== 'auto') this.adaptive.reset(values.quality);
+    if (wanted !== this.qualityLevel) this.setQuality(wanted);
     this.audio.setVolume(values.volume);
     this.audio.latencyOffset = values.latencyMs / 1000;
     this.chase.settings.shakeEnabled = values.cameraShake;

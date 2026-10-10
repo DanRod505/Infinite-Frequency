@@ -1,8 +1,7 @@
+import { STORES, openDatabase, requestResult, transactionDone } from '../core/db';
 import type { MusicAnalysis } from './analysisTypes';
 import { ANALYZER_VERSION } from './MusicAnalyzer';
 
-const DB_NAME = 'infinite-frequency';
-const STORE = 'analyses';
 const MAX_ENTRIES = 20;
 
 interface Entry {
@@ -17,75 +16,49 @@ interface Entry {
  * "not cached"; the cache is never required for the game to work.
  */
 export class AnalysisCache {
-  private db: Promise<IDBDatabase | null> | null = null;
-
   /** SHA-256 of the file contents combined with the analyzer version. */
   static async keyFor(data: ArrayBuffer): Promise<string | null> {
+    const hash = await contentHash(data);
+    return hash ? `v${ANALYZER_VERSION}:${hash}` : null;
+  }
+
+  async get(key: string): Promise<MusicAnalysis | null> {
+    const db = await openDatabase();
+    if (!db) return null;
     try {
-      const digest = await crypto.subtle.digest('SHA-256', data);
-      const hex = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
-      return `v${ANALYZER_VERSION}:${hex}`;
+      const entry = await requestResult<Entry | undefined>(db.transaction(STORES.analyses, 'readonly').objectStore(STORES.analyses).get(key), undefined);
+      return entry && entry.analysis.version === ANALYZER_VERSION ? entry.analysis : null;
     } catch {
       return null;
     }
   }
 
-  async get(key: string): Promise<MusicAnalysis | null> {
-    const db = await this.open();
-    if (!db) return null;
-    return new Promise((resolve) => {
-      try {
-        const request = db.transaction(STORE, 'readonly').objectStore(STORE).get(key);
-        request.onsuccess = () => {
-          const entry = request.result as Entry | undefined;
-          resolve(entry && entry.analysis.version === ANALYZER_VERSION ? entry.analysis : null);
-        };
-        request.onerror = () => resolve(null);
-      } catch {
-        resolve(null);
-      }
-    });
-  }
-
   async put(key: string, analysis: MusicAnalysis): Promise<void> {
-    const db = await this.open();
+    const db = await openDatabase();
     if (!db) return;
-    await new Promise<void>((resolve) => {
-      try {
-        const tx = db.transaction(STORE, 'readwrite');
-        const store = tx.objectStore(STORE);
-        store.put({ key, savedAt: Date.now(), analysis } satisfies Entry);
-        // Keep only the most recent entries.
-        const all = store.index('savedAt').getAllKeys();
-        all.onsuccess = () => {
-          const keys = all.result;
-          for (let i = 0; i < keys.length - MAX_ENTRIES; i++) store.delete(keys[i]);
-        };
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => resolve();
-        tx.onabort = () => resolve();
-      } catch {
-        resolve();
-      }
-    });
+    try {
+      const tx = db.transaction(STORES.analyses, 'readwrite');
+      const store = tx.objectStore(STORES.analyses);
+      store.put({ key, savedAt: Date.now(), analysis } satisfies Entry);
+      // Keep only the most recent entries.
+      const all = store.index('savedAt').getAllKeys();
+      all.onsuccess = () => {
+        const keys = all.result;
+        for (let i = 0; i < keys.length - MAX_ENTRIES; i++) store.delete(keys[i]);
+      };
+      await transactionDone(tx);
+    } catch {
+      // Ignore: the analysis simply is not cached.
+    }
   }
+}
 
-  private open(): Promise<IDBDatabase | null> {
-    this.db ??= new Promise((resolve) => {
-      try {
-        if (typeof indexedDB === 'undefined') return resolve(null);
-        const request = indexedDB.open(DB_NAME, 1);
-        request.onupgradeneeded = () => {
-          const store = request.result.createObjectStore(STORE, { keyPath: 'key' });
-          store.createIndex('savedAt', 'savedAt');
-        };
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => resolve(null);
-        request.onblocked = () => resolve(null);
-      } catch {
-        resolve(null);
-      }
-    });
-    return this.db;
+/** Hex SHA-256 of a buffer, or null where Web Crypto is unavailable. */
+export async function contentHash(data: ArrayBuffer): Promise<string | null> {
+  try {
+    const digest = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return null;
   }
 }

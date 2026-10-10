@@ -21,8 +21,12 @@ function options(difficulty: Difficulty, seed = 1, obstacles = true): ChartOptio
 }
 
 /** Plays a whole chart with the fixed-step simulation, like the game does. */
-function play(chart: Chart, duration: number, steering: 'analog' | 'digital') {
-  const vehicle = new VehicleController(ROAD_WIDTH);
+function play(chart: Chart, duration: number, steering: 'analog' | 'digital', sensitivity = 1) {
+  const base = new VehicleController(ROAD_WIDTH).tuning;
+  const vehicle = new VehicleController(ROAD_WIDTH, {
+    steerResponse: base.steerResponse * sensitivity,
+    steerRelease: base.steerRelease * sensitivity,
+  });
   const rhythm = new RhythmSystem(chart, vehicle.tuning.halfWidth);
   const previous = createVehicleState();
   const events: RhythmEvent[] = [];
@@ -158,6 +162,17 @@ describe('playability (§12.1): a bot can collect everything', () => {
       }
     });
   }
+
+  it('stays fully playable at the lowest and highest steering sensitivity (§12.4)', () => {
+    for (const sensitivity of [0.6, 1.4]) {
+      for (const difficulty of DIFFICULTIES) {
+        const chart = generateChart(demo, options(difficulty, 2));
+        const { result } = play(chart, demo.duration, 'digital', sensitivity);
+        expect(result.collected).toBe(result.totalNotes);
+        expect(result.obstaclesHit).toBe(0);
+      }
+    }
+  });
 
   it('works on other tempos too', () => {
     for (const bpm of [90, 150]) {

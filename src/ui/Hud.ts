@@ -37,6 +37,9 @@ export class Hud {
   private debugVisible = false;
   private toastTimer = 0;
   private hintTimer = 0;
+  private readonly pauseButton: HTMLElement;
+  /** Called by the on-screen pause button (needed on touch screens without Esc). */
+  onPause: (() => void) | null = null;
   private lastCountdown = -1;
 
   constructor(container: HTMLElement) {
@@ -57,7 +60,8 @@ export class Hud {
       <div class="hud-countdown" data-countdown hidden></div>
       <div class="hud-toast" data-toast hidden></div>
       <pre class="hud-debug" data-debug hidden></pre>
-      <div class="hud-hint hud-hint--hidden" data-hint></div>`;
+      <div class="hud-hint hud-hint--hidden" data-hint></div>
+      <button class="hud-pause-button" data-pause-button aria-label="Pausar" title="Pausar (Esc)" hidden>❚❚</button>`;
     container.appendChild(this.root);
     const q = (selector: string) => {
       const element = this.root.querySelector<HTMLElement>(selector);
@@ -68,6 +72,8 @@ export class Hud {
     this.distance = q('[data-distance]');
     this.debug = q('[data-debug]');
     this.hint = q('[data-hint]');
+    this.pauseButton = q('[data-pause-button]');
+    this.pauseButton.addEventListener('click', () => this.onPause?.());
     this.progress = q('[data-progress]');
     this.progressBar = q('[data-progress-bar]');
     this.title = q('[data-title]');
@@ -131,9 +137,12 @@ export class Hud {
     this.beat.hidden = title === null;
     this.countdown.hidden = true;
     this.lastCountdown = -1;
+    this.pauseButton.hidden = !interactive;
     if (interactive) {
-      this.hint.textContent =
-        title === null
+      const touch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+      this.hint.textContent = touch
+        ? 'Toque e segure à esquerda ou à direita da tela para dirigir · ❚❚ pausa'
+        : title === null
           ? 'A / D ou ← / → para dirigir · Esc pausa · N nova pista · F3 debug'
           : 'A / D ou ← / → para dirigir · Esc pausa · [ ] ajustam a latência · F3 debug';
       this.hint.classList.remove('hud-hint--hidden');

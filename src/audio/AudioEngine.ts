@@ -31,6 +31,11 @@ export class AudioEngine {
     return this.context;
   }
 
+  /** The AudioContext if one was already created (never creates one). */
+  get existingContext(): AudioContext | null {
+    return this.context;
+  }
+
   async decode(data: ArrayBuffer): Promise<AudioBuffer> {
     // decodeAudioData detaches the buffer it receives.
     return this.getContext().decodeAudioData(data.slice(0));

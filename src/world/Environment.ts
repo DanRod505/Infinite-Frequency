@@ -182,6 +182,11 @@ export class Environment {
     scene.add(this.group);
   }
 
+  /** Draws only a fraction of the ambient sparkles (graphics quality). */
+  setSparkleFraction(fraction: number): void {
+    this.sparkles.geometry.setDrawRange(0, Math.round(SPARKLE_COUNT * Math.min(1, Math.max(0, fraction))));
+  }
+
   /** Current (possibly mid-transition) palette, shared with the other world systems. */
   get palette(): Palette {
     return this.current;

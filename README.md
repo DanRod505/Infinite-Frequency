@@ -4,7 +4,7 @@ Jogo 3D de corrida musical para navegador: o veículo percorre estradas e cenár
 
 **Jogar no navegador:** https://danrod505.github.io/Infinite-Frequency/
 
-## Estado atual — Fase 4: cenário procedural
+## Estado atual — Fase 5: vertical slice
 
 Seguindo a diretriz do GDD (§18), o desenvolvimento avança pelos fundamentos. Fases concluídas:
 
@@ -78,6 +78,26 @@ Também incluídos:
 - **Desempenho (§11.4):** uma malha instanciada por tipo de objeto; ~65 draw calls por quadro com cenário, notas, eventos e bloom. O bloom pode ser desligado nas configurações.
 - **Sem música**, a paleta muda a cada 40 s para mostrar a variação do bioma.
 
+### Fase 5 — vertical slice
+
+| Entrega | Implementação |
+|---|---|
+| Menu principal (§10.1) | Jogar, Garagem, Recordes, Configurações e Como jogar |
+| Seleção de música | Importar arquivo (botão ou arrastar e soltar), **biblioteca** com as músicas já importadas, faixa de demonstração ou dirigir sem música |
+| Seleção de modo | Rhythm Run ou Free Ride, dificuldade, obstáculos e seed na tela de preparação, com o recorde atual |
+| Configurações | Áudio (música, efeitos sonoros, latência), gráficos (qualidade, intensidade dos efeitos), acessibilidade e controle (flashes, tremor, sensibilidade da direção) |
+| Resultados | Classificação, pontuação, recorde anterior, estatísticas; repetir, nova variação ou voltar ao menu |
+| Otimização inicial | Qualidade Baixa/Média/Alta e **Automática** (reduz sozinha se o FPS cair); Three.js e React em arquivos separados para cache |
+
+Também incluídos:
+
+- **"Como jogar"** aparece sozinho antes da primeira corrida no Rhythm Run, para a pessoa entender o jogo sem ajuda.
+- **Biblioteca de músicas:** até 12 músicas (250 MB) ficam salvas no navegador (IndexedDB), junto com a análise, e abrem em segundos.
+- **Garagem (§8.2):** cor da carroceria e da luz inferior; puramente visual.
+- **Sons de coleta e colisão**, sintetizados e com volume próprio.
+- **Toque e mouse:** segurar a metade esquerda ou direita da tela dirige; um botão na tela pausa (indispensável sem teclado).
+- **React (§11.1)** nos menus; o HUD da corrida continua em DOM direto por desempenho.
+
 ### Controles
 
 | Tecla | Ação |
@@ -88,6 +108,8 @@ Também incluídos:
 | [ / ] | Ajustar a latência em ±5 ms durante a corrida |
 | N | Nova pista (só em "Dirigir sem música") |
 | F3 | Painel de depuração (seed, FPS, tempo da música, BPM, latência…) |
+| Toque / clique e segurar | Metade esquerda ou direita da tela dirige |
+| Botão ❚❚ | Pausar (toque) |
 | Espaço | Reservado para mecânica futura |
 
 A seed fica na URL (`?seed=42`), então o mesmo percurso pode ser reproduzido e compartilhado. Seeds não numéricas (`?seed=neon`) também funcionam.
@@ -116,7 +138,7 @@ O build usa caminhos relativos (`base: './'`), então funciona no subcaminho `/I
 
 ```
 src/
-  App.ts     fluxo: importação → análise → seed → corrida → resultados
+  App.ts     fluxo: menu → música → análise → modo e seed → corrida → resultados
   audio/     AudioEngine, PlaybackClock, MusicAnalyzer (+ FFT), MusicTimeline,
              worker de análise, cache IndexedDB, faixa de demonstração
   core/      RNG determinístico, loop de passo fixo, input, configurações
@@ -126,8 +148,9 @@ src/
   world/     Environment (céu, sol, névoa, grade, luzes), paletas, WorldPlanner
              (eventos planejados), SceneryGenerator/Renderer (objetos procedurais),
              EventRenderer (túneis e portais), Particles
-  ui/        Menu e HUD em DOM
-  game/      Game (sessão), GameDirector (música → parâmetros visuais), runTiming, PostFX (bloom)
+  ui/        HUD em DOM; menu/ com as telas em React (store, contexto, telas, controles)
+  game/      Game (sessão), GameDirector (música → parâmetros visuais), runTiming,
+             PostFX (bloom), Quality (presets e ajuste automático)
   rhythm/    ChartGenerator (notas, padrões, validador, obstáculos), RhythmSystem
              (julgamento), ScoreKeeper (pontos e combos), RhythmRenderer, Records
 tests/       determinismo, continuidade, restrições geométricas, controlador,
@@ -191,16 +214,17 @@ Todos os parâmetros ficam em `src/track/TrackConfig.ts`.
 - **D04 — Geração:** a música só modula o quão "viva" é a pista (proporção de retas, amplitude das curvas), nunca os limites geométricos. Curvas não são disparadas por batidas.
 - **D07 — Cenários:** Neon Dreams confirmado como bioma inicial, com quatro variações de paleta por seção.
 - **D09 — Persistência:** análises no IndexedDB (até 20, pelo hash do arquivo); configurações no localStorage; seed na URL.
-- **React** (previsto no GDD §11.1) ainda não foi adotado: menus e HUD são DOM simples. Entra com os menus completos da Fase 5.
+- **React** (GDD §11.1) adotado nos menus na Fase 5; o HUD da corrida segue em DOM direto, atualizado a cada quadro sem passar pelo React.
+- **D08 — Progressão:** sem desbloqueios na primeira versão; a garagem libera todas as cores desde o início.
+- **D09 — Persistência:** além do que já existia, a biblioteca de músicas fica no IndexedDB (até 12 músicas / 250 MB, removendo as menos tocadas).
 
-## Próximos passos (Fase 5 — vertical slice)
+## Próximos passos (Fase 6 — expansão)
 
-Menu principal completo, seleção de música e de modo, configurações, resultados e otimização inicial, para que uma pessoa consiga iniciar, jogar e concluir uma sessão completa sem assistência.
+O GDD lista como possibilidades: novos biomas (Cyber City, Ethereal Forest, Cosmic Highway), novos veículos, mais personalização, progressão, desafios, refinamento musical e compartilhamento de percursos.
 
 Pontos técnicos já identificados:
 
-- **Desempenho real:** o orçamento de draw calls está baixo, mas o FPS precisa ser medido em máquinas desktop de referência (o ambiente de desenvolvimento não tem GPU). Um seletor de qualidade gráfica (§11.4) deve vir junto.
+- **Desempenho real:** o FPS precisa ser medido em máquinas desktop de referência (o ambiente de desenvolvimento não tem GPU); a qualidade automática cobre máquinas mais lentas enquanto isso.
 - **Balanceamento:** pontuação, folgas e densidade por dificuldade são provisórios e ficam em `src/rhythm/types.ts`.
-- **Sons de coleta** e **sensibilidade da direção (§12.4)** ainda não existem.
 - **Origem flutuante:** as posições crescem com a distância; em sessões muito longas, rebasear a origem do mundo evitará perda de precisão em float32.
-- **Outros biomas** (Cyber City, Ethereal Forest, Cosmic Highway) pertencem à Fase 6; o sistema de paletas e cenário por trecho já separa pista e ambiente como o §5.1 pede.
+- **Andamento variável:** músicas com mudanças bruscas de andamento são o próximo ponto de robustez da análise.

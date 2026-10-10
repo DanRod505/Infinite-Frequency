@@ -38,6 +38,8 @@ export class Particles {
   private readonly burstVelocities = new Float32Array(BURST_PARTICLES * 3);
   private readonly burstOrigin = new Vector3();
   private burstAge = BURST_LIFE;
+  /** Speed streaks can be turned off by the graphics quality. */
+  streaksEnabled = true;
 
   private readonly frame = new TrackFrame();
   private readonly position = new Vector3();
@@ -99,7 +101,7 @@ export class Particles {
 
   update(dt: number, distance: number, speed: number, music: MusicVisualState, palette: Palette, generator: TrackGenerator, effects: number): void {
     // Speed streaks: only in intense passages, scaled by the effects setting.
-    const visibility = Math.min(1, Math.max(0, (music.intensity - 0.55) * 3)) * effects;
+    const visibility = this.streaksEnabled ? Math.min(1, Math.max(0, (music.intensity - 0.55) * 3)) * effects : 0;
     let count = 0;
     if (visibility > 0.01) {
       const travel = speed * 1.8 * dt;
