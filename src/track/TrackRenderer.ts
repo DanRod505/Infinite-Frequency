@@ -63,6 +63,10 @@ export class TrackRenderer {
     this.roadMaterial.emissiveIntensity = 0.85 + 1.0 * beatPulse + 0.35 * intensity;
   }
 
+  /** First and last chunk indices currently streamed (scenery follows the same window). */
+  activeFirst = 0;
+  activeLast = 0;
+
   get activeChunkCount(): number {
     return this.active.size;
   }
@@ -78,6 +82,8 @@ export class TrackRenderer {
     const current = this.generator.chunkIndexAt(distance);
     const first = Math.max(0, current - this.chunksBehind);
     const last = current + this.chunksAhead;
+    this.activeFirst = first;
+    this.activeLast = last;
 
     for (const [index, mesh] of this.active) {
       if (index < first || index > last) this.release(index, mesh);

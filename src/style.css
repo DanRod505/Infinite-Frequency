@@ -62,7 +62,7 @@ canvas {
 .hud-debug {
   position: absolute;
   left: 16px;
-  top: 12px;
+  top: 110px; /* below the score */
   margin: 0;
   padding: 8px 12px;
   font: 12px/1.5 ui-monospace, monospace;

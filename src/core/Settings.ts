@@ -13,6 +13,8 @@ export interface SettingsData {
   /** Removes full-screen flashes and limits strobing. */
   reduceFlashes: boolean;
   cameraShake: boolean;
+  /** Bloom post-processing (glow); off improves performance. */
+  bloom: boolean;
   /** Last chosen game mode, difficulty and obstacle option (ready screen). */
   mode: GameMode;
   difficulty: Difficulty;
@@ -25,6 +27,7 @@ export const DEFAULT_SETTINGS: SettingsData = {
   effects: 1,
   reduceFlashes: false,
   cameraShake: true,
+  bloom: true,
   mode: 'rhythm',
   difficulty: 'normal',
   obstacles: true,
@@ -79,6 +82,7 @@ function sanitise(data: SettingsData): SettingsData {
     effects: num(data.effects, DEFAULT_SETTINGS.effects, 0, 1),
     reduceFlashes: typeof data.reduceFlashes === 'boolean' ? data.reduceFlashes : DEFAULT_SETTINGS.reduceFlashes,
     cameraShake: typeof data.cameraShake === 'boolean' ? data.cameraShake : DEFAULT_SETTINGS.cameraShake,
+    bloom: typeof data.bloom === 'boolean' ? data.bloom : DEFAULT_SETTINGS.bloom,
     mode: data.mode === 'free' || data.mode === 'rhythm' ? data.mode : DEFAULT_SETTINGS.mode,
     difficulty: ['easy', 'normal', 'hard'].includes(data.difficulty) ? data.difficulty : DEFAULT_SETTINGS.difficulty,
     obstacles: typeof data.obstacles === 'boolean' ? data.obstacles : DEFAULT_SETTINGS.obstacles,

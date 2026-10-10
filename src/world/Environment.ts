@@ -23,27 +23,15 @@ import {
 } from 'three';
 import { Rng } from '../core/rng';
 import type { MusicVisualState } from '../game/GameDirector';
-
-/** Sky and fog palettes blended by musical intensity (GDD §5.3, §9.2). */
-const CALM = {
-  top: new Color(0x090018),
-  middle: new Color(0x3a0b5c),
-  horizon: new Color(0xff3c8e),
-  fog: new Color(0x1a0630),
-};
-const INTENSE = {
-  top: new Color(0x16002e),
-  middle: new Color(0x7a0f74),
-  horizon: new Color(0xff7a45),
-  fog: new Color(0x2e0a3c),
-};
+import { PALETTES, clonePalette, lerpPalette, type Palette } from './palettes';
 
 const SPARKLE_COUNT = 500;
 const SPARKLE_BOX = { x: 160, y: 50, z: 260 };
 
 /**
- * Minimal Neon Dreams-style atmosphere for the driving prototype (GDD §5.2).
- * Only enough to read speed and depth; full biome work belongs to Phase 4.
+ * Sky, sun, fog, grid, lights and ambient sparkles of the Neon Dreams biome
+ * (GDD §5.2, §9.2). Colours come from the active palette; changes between
+ * palettes are interpolated over time (§5.5), instant only when asked.
  */
 export class Environment {
   readonly group = new Group();
@@ -55,13 +43,19 @@ export class Environment {
   private readonly sparkleOffsets: Float32Array;
   private readonly hemisphere: HemisphereLight;
   private readonly fog: Fog;
-  private readonly gridMaterials: { opacity: number }[];
+  private readonly gridMaterials: { opacity: number; color: Color }[];
+  private readonly current = clonePalette(PALETTES.sunset);
+  private readonly from = clonePalette(PALETTES.sunset);
+  private to: Palette = PALETTES.sunset;
+  private transition = 1;
+  private transitionSeconds = 1;
+  private intensity = 0.35;
   private readonly gridCell = 20;
   private readonly gridLevel = -45;
 
   constructor(scene: Scene) {
     this.group.name = 'Environment';
-    this.fog = new Fog(CALM.fog.clone(), 120, 850);
+    this.fog = new Fog(this.current.fog.clone(), 120, 850);
     scene.background = this.fog.color;
     scene.fog = this.fog;
 
@@ -79,9 +73,9 @@ export class Environment {
         depthWrite: false,
         fog: false,
         uniforms: {
-          top: { value: CALM.top.clone() },
-          middle: { value: CALM.middle.clone() },
-          horizon: { value: CALM.horizon.clone() },
+          top: { value: this.current.skyTop.clone() },
+          middle: { value: this.current.skyMiddle.clone() },
+          horizon: { value: this.current.skyHorizon.clone() },
         },
         vertexShader: /* glsl */ `
           varying vec3 vDir;
@@ -112,6 +106,10 @@ export class Environment {
         transparent: true,
         depthWrite: false,
         fog: false,
+        uniforms: {
+          sunTop: { value: this.current.sunTop.clone() },
+          sunBottom: { value: this.current.sunBottom.clone() },
+        },
         vertexShader: /* glsl */ `
           varying vec2 vUv;
           void main() {
@@ -119,13 +117,15 @@ export class Environment {
             gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
           }`,
         fragmentShader: /* glsl */ `
+          uniform vec3 sunTop;
+          uniform vec3 sunBottom;
           varying vec2 vUv;
           void main() {
             vec2 p = vUv - 0.5;
             float r = length(p);
             if (r > 0.5) discard;
-            // Retro sun: warm gradient cut by horizontal bands near the bottom.
-            vec3 color = mix(vec3(1.0, 0.18, 0.55), vec3(1.0, 0.85, 0.3), vUv.y);
+            // Retro sun: vertical gradient cut by horizontal bands near the bottom.
+            vec3 color = mix(sunBottom, sunTop, vUv.y);
             float bands = step(0.5, fract(vUv.y * 14.0));
             float cut = vUv.y < 0.45 ? bands : 1.0;
             float edge = smoothstep(0.5, 0.47, r);
@@ -144,7 +144,8 @@ export class Environment {
     this.floor.rotation.x = -Math.PI / 2;
     this.group.add(this.floor);
 
-    this.grid = new GridHelper(2400, 2400 / this.gridCell, 0xff2ad4, 0x7a1fd0);
+    // White/grey lines tinted by the palette through the material colour.
+    this.grid = new GridHelper(2400, 2400 / this.gridCell, 0xffffff, 0x8a8a8a);
     const gridMaterials = Array.isArray(this.grid.material) ? this.grid.material : [this.grid.material];
     for (const material of gridMaterials) {
       material.transparent = true;
@@ -181,8 +182,30 @@ export class Environment {
     scene.add(this.group);
   }
 
-  /** Keeps background elements centred on the camera. */
-  update(cameraPosition: Vector3): void {
+  /** Current (possibly mid-transition) palette, shared with the other world systems. */
+  get palette(): Palette {
+    return this.current;
+  }
+
+  /** Blends to `palette` over `seconds` (0 = instant, for high-impact moments). */
+  transitionTo(palette: Palette, seconds: number): void {
+    if (palette === this.to && this.transition >= 1) return;
+    lerpPalette(this.current, this.current, 0, this.from);
+    this.to = palette;
+    this.transitionSeconds = Math.max(0, seconds);
+    this.transition = seconds > 0 ? 0 : 1;
+    if (seconds <= 0) lerpPalette(palette, palette, 0, this.current);
+  }
+
+  /** Keeps background elements centred on the camera and advances palette transitions. */
+  update(cameraPosition: Vector3, dt = 0): void {
+    if (this.transition < 1) {
+      this.transition = Math.min(1, this.transition + dt / this.transitionSeconds);
+      const t = this.transition * this.transition * (3 - 2 * this.transition);
+      lerpPalette(this.from, this.to, t, this.current);
+    }
+    this.applyPalette();
+
     this.sky.position.copy(cameraPosition);
     // The sun sits on the horizon in the track's main direction (-Z).
     this.sun.position.set(cameraPosition.x, 130, cameraPosition.z - 1300);
@@ -208,14 +231,10 @@ export class Environment {
     positions.needsUpdate = true;
   }
 
-  /** Applies the music-driven state (palette, pulses, particles). */
+  /** Applies the music-driven state (pulses, particles, horizon glow). */
   applyMusic(music: MusicVisualState): void {
-    const t = Math.min(1, Math.max(0, (music.intensity - 0.3) / 0.6));
-    const u = this.sky.material.uniforms;
-    (u.top.value as Color).lerpColors(CALM.top, INTENSE.top, t);
-    (u.middle.value as Color).lerpColors(CALM.middle, INTENSE.middle, t);
-    (u.horizon.value as Color).lerpColors(CALM.horizon, INTENSE.horizon, t);
-    this.fog.color.lerpColors(CALM.fog, INTENSE.fog, t);
+    this.intensity = music.intensity;
+    this.applyPalette();
 
     this.sun.scale.setScalar(1 + 0.1 * music.bass + 0.04 * music.beatPulse);
     const gridOpacity = Math.min(1, 0.3 + 0.35 * music.bass + 0.35 * music.beatPulse);
@@ -225,6 +244,20 @@ export class Environment {
     const sparkle = this.sparkles.material;
     sparkle.opacity = Math.min(1, 0.15 + 0.85 * music.high);
     sparkle.size = 0.35 + 0.6 * music.high;
+  }
+
+  private applyPalette(): void {
+    const p = this.current;
+    const u = this.sky.material.uniforms;
+    (u.top.value as Color).copy(p.skyTop);
+    (u.middle.value as Color).copy(p.skyMiddle);
+    // The horizon glows brighter with musical intensity.
+    (u.horizon.value as Color).copy(p.skyHorizon).multiplyScalar(0.8 + 0.4 * this.intensity);
+    this.fog.color.copy(p.fog);
+    const sun = this.sun.material.uniforms;
+    (sun.sunTop.value as Color).copy(p.sunTop);
+    (sun.sunBottom.value as Color).copy(p.sunBottom);
+    for (const material of this.gridMaterials) material.color.copy(p.gridMain);
   }
 
   dispose(): void {

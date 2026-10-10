@@ -89,7 +89,7 @@ export class VehicleModel {
 
     const spin = (speed / 0.36) * dt;
     for (const wheel of this.wheels) wheel.rotation.x -= spin;
-    this.underglow.material.opacity = 0.3 + 0.08 * Math.sin(time * 4) + 0.45 * this.pulse;
+    this.underglow.material.opacity = 0.25 + 0.06 * Math.sin(time * 4) + 0.3 * this.pulse;
   }
 
   /** Music pulse in [0, 1] for the underglow. */

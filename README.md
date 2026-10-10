@@ -4,7 +4,7 @@ Jogo 3D de corrida musical para navegador: o veículo percorre estradas e cenár
 
 **Jogar no navegador:** https://danrod505.github.io/Infinite-Frequency/
 
-## Estado atual — Fase 3: jogabilidade rítmica
+## Estado atual — Fase 4: cenário procedural
 
 Seguindo a diretriz do GDD (§18), o desenvolvimento avança pelos fundamentos. Fases concluídas:
 
@@ -59,6 +59,25 @@ Também incluídos:
 - **Recordes locais** por música, dificuldade e obstáculos, salvos no navegador.
 - **Pontuação consistente:** cada nota é julgada no passo fixo da simulação em que o carro cruza sua distância, então o mesmo percurso jogado do mesmo jeito dá sempre a mesma pontuação.
 
+### Fase 4 — cenário procedural
+
+| Entrega | Implementação |
+|---|---|
+| Bioma Neon Dreams | Montanhas geométricas em wireframe, torres e monólitos com janelas, cristais flutuantes, postes de luz nas bordas e pilares sustentando a pista elevada |
+| Objetos procedurais | Gerados por trecho de pista e determinísticos pela seed; a densidade e a altura acompanham a intensidade da música |
+| Iluminação dinâmica | Postes pulsam na batida e se acendem nos build-ups, janelas com os médios, montanhas com os graves, cristais com os agudos; bloom configurável |
+| Partículas | Brilhos ambientes (agudos), linhas de velocidade nas passagens intensas e explosão no drop, com limites fixos |
+| Eventos ambientais | Túnel de anéis de luz no início de cada seção intensa, com um anel em cada batida (o carro atravessa um por batida), e portal monumental nos drops |
+| Transições | Uma paleta por seção (pôr do sol, meia-noite, ultravioleta, inferno), interpolada em 2,5 s; mais rápida quando um túnel esconde a mudança; instantânea só no drop |
+
+Também incluídos:
+
+- **Planejamento antecipado (§5.4):** os eventos são definidos pela análise antes da corrida e posicionados na pista pelo mapeamento tempo → distância.
+- **Segurança da pista:** nenhum objeto invade o corredor da pista, nem onde outro trecho dela passa por perto. Os testes verificam isso contra todos os pontos da pista em várias seeds.
+- **Legibilidade (§15.5):** o bloom só realça o que é realmente brilhante, a explosão do drop fica no céu, e as notas (brancas) e os obstáculos (listrados de vermelho) seguem distintos do cenário.
+- **Desempenho (§11.4):** uma malha instanciada por tipo de objeto; ~65 draw calls por quadro com cenário, notas, eventos e bloom. O bloom pode ser desligado nas configurações.
+- **Sem música**, a paleta muda a cada 40 s para mostrar a variação do bioma.
+
 ### Controles
 
 | Tecla | Ação |
@@ -104,14 +123,17 @@ src/
   track/     TrackGenerator (geometria procedural) e TrackRenderer (malhas, streaming, pooling)
   vehicle/   VehicleController (lógica arcade, testável) e VehicleModel (visual)
   camera/    ChaseCamera
-  world/     Environment (céu, sol, névoa, grade, luzes, partículas)
+  world/     Environment (céu, sol, névoa, grade, luzes), paletas, WorldPlanner
+             (eventos planejados), SceneryGenerator/Renderer (objetos procedurais),
+             EventRenderer (túneis e portais), Particles
   ui/        Menu e HUD em DOM
-  game/      Game (sessão), GameDirector (música → parâmetros visuais), runTiming
+  game/      Game (sessão), GameDirector (música → parâmetros visuais), runTiming, PostFX (bloom)
   rhythm/    ChartGenerator (notas, padrões, validador, obstáculos), RhythmSystem
              (julgamento), ScoreKeeper (pontos e combos), RhythmRenderer, Records
 tests/       determinismo, continuidade, restrições geométricas, controlador,
              análise musical contra gabarito, linha temporal, sincronização,
-             partitura, jogabilidade (piloto robô), pontuação e recordes
+             partitura, jogabilidade (piloto robô), pontuação, recordes,
+             planejamento do mundo e folga do cenário em relação à pista
 ```
 
 Pipeline (GDD §11.3): **arquivo → análise (worker) → linha temporal → geração de pista e cenário → execução sincronizada → resultados.**
@@ -167,18 +189,18 @@ Todos os parâmetros ficam em `src/track/TrackConfig.ts`.
 - **D05 — Colisões:** quebram o combo e tiram 150 pontos, com efeito visual; sem redução de velocidade (manteria as notas fora de sincronia) e sem encerrar a corrida.
 - **D06 — Dificuldade:** três níveis com densidade, amplitude, folga e obstáculos próprios (`DIFFICULTY_PRESETS` em `src/rhythm/types.ts`).
 - **D04 — Geração:** a música só modula o quão "viva" é a pista (proporção de retas, amplitude das curvas), nunca os limites geométricos. Curvas não são disparadas por batidas.
-- **D07 — Cenários:** atmosfera Neon Dreams, agora reativa à música.
+- **D07 — Cenários:** Neon Dreams confirmado como bioma inicial, com quatro variações de paleta por seção.
 - **D09 — Persistência:** análises no IndexedDB (até 20, pelo hash do arquivo); configurações no localStorage; seed na URL.
 - **React** (previsto no GDD §11.1) ainda não foi adotado: menus e HUD são DOM simples. Entra com os menus completos da Fase 5.
 
-## Próximos passos (Fase 4 — cenário procedural)
+## Próximos passos (Fase 5 — vertical slice)
 
-Bioma Neon Dreams completo (montanhas geométricas, estruturas neon, objetos procedurais instanciados), iluminação dinâmica, partículas, eventos ambientais nos drops e transições entre seções.
+Menu principal completo, seleção de música e de modo, configurações, resultados e otimização inicial, para que uma pessoa consiga iniciar, jogar e concluir uma sessão completa sem assistência.
 
 Pontos técnicos já identificados:
 
-- **Balanceamento:** valores de pontuação, folgas e densidade por dificuldade são provisórios (o GDD prevê ajuste em testes) e ficam todos em `src/rhythm/types.ts`.
-- **Sons de coleta:** a coleta tem retorno visual; um som discreto ajudaria, mas precisa ser equilibrado com a música.
-- **Sensibilidade da direção (§12.4):** ainda não configurável.
+- **Desempenho real:** o orçamento de draw calls está baixo, mas o FPS precisa ser medido em máquinas desktop de referência (o ambiente de desenvolvimento não tem GPU). Um seletor de qualidade gráfica (§11.4) deve vir junto.
+- **Balanceamento:** pontuação, folgas e densidade por dificuldade são provisórios e ficam em `src/rhythm/types.ts`.
+- **Sons de coleta** e **sensibilidade da direção (§12.4)** ainda não existem.
 - **Origem flutuante:** as posições crescem com a distância; em sessões muito longas, rebasear a origem do mundo evitará perda de precisão em float32.
-- **Andamento variável:** o rastreador acompanha pequenas variações, mas músicas com mudanças bruscas de andamento são o próximo ponto de robustez da análise.
+- **Outros biomas** (Cyber City, Ethereal Forest, Cosmic Highway) pertencem à Fase 6; o sistema de paletas e cenário por trecho já separa pista e ambiente como o §5.1 pede.

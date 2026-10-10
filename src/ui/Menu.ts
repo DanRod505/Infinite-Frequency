@@ -305,7 +305,8 @@ const SETTINGS_TEMPLATE = `
   </label>
   <label>Intensidade dos efeitos <input type="range" name="effects" min="0" max="100" step="5" /></label>
   <label class="check"><input type="checkbox" name="reduceFlashes" /> Reduzir flashes</label>
-  <label class="check"><input type="checkbox" name="cameraShake" /> Tremor de câmera</label>`;
+  <label class="check"><input type="checkbox" name="cameraShake" /> Tremor de câmera</label>
+  <label class="check"><input type="checkbox" name="bloom" /> Brilho neon (bloom) <small>— desligue se o jogo ficar lento</small></label>`;
 
 const TEMPLATE = `
   <section class="menu-card" data-screen="home">

@@ -15,12 +15,18 @@ import { randomSeed, type RunSummary } from '../ui/Menu';
 import { VehicleController, copyVehicleState, createVehicleState } from '../vehicle/VehicleController';
 import { VehicleModel } from '../vehicle/VehicleModel';
 import { Environment } from '../world/Environment';
+import { EventRenderer } from '../world/EventRenderer';
+import { Particles } from '../world/Particles';
+import { SceneryRenderer } from '../world/SceneryRenderer';
+import { buildProgress, paletteAt, planWorld, type WorldPlan } from '../world/WorldPlanner';
+import { PALETTES, type PaletteName } from '../world/palettes';
+import { PostFX } from './PostFX';
 import { generateChart } from '../rhythm/ChartGenerator';
 import { RhythmRenderer } from '../rhythm/RhythmRenderer';
 import { RhythmSystem, type RhythmEvent } from '../rhythm/RhythmSystem';
 import type { Difficulty } from '../rhythm/types';
 import { GameDirector } from './GameDirector';
-import { LEAD_IN, songTimeAtDistance } from './runTiming';
+import { LEAD_IN, distanceAtSongTime, songTimeAtDistance } from './runTiming';
 
 export interface MusicSource {
   buffer: AudioBuffer;
@@ -55,6 +61,10 @@ export interface GameEvents {
   onFinished(summary: RunSummary): void;
 }
 
+/** Palette rotation for drives without music (one change every FREE_PALETTE_SECONDS). */
+const FREE_PALETTES: PaletteName[] = ['sunset', 'ultraviolet', 'midnight', 'inferno'];
+const FREE_PALETTE_SECONDS = 40;
+
 /** Height of the vehicle origin above the road surface. */
 const RIDE_HEIGHT = 0;
 /** Delay between the end of the song and the results screen. */
@@ -75,6 +85,13 @@ export class Game {
   private readonly loop: GameLoop;
   private readonly chase: ChaseCamera;
   private readonly environment: Environment;
+  private readonly scenery = new SceneryRenderer();
+  private readonly worldEvents = new EventRenderer();
+  private readonly particles = new Particles();
+  private readonly postFX: PostFX;
+  private worldPlan: WorldPlan | null = null;
+  private paletteName: PaletteName | null = null;
+  private dropPending = false;
   private readonly vehicleModel = new VehicleModel();
   private readonly hud: Hud;
   private readonly director: GameDirector;
@@ -113,6 +130,7 @@ export class Game {
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.1;
+    this.renderer.info.autoReset = false;
     container.appendChild(this.renderer.domElement);
 
     this.chase = new ChaseCamera(1);
@@ -120,11 +138,22 @@ export class Game {
     this.generator = new TrackGenerator(0);
     this.trackRenderer = new TrackRenderer(this.generator);
     this.vehicle = new VehicleController(this.generator.roadWidth);
-    this.scene.add(this.trackRenderer.group, this.vehicleModel.root, this.rhythmRenderer.group);
+    this.scene.add(
+      this.trackRenderer.group,
+      this.vehicleModel.root,
+      this.rhythmRenderer.group,
+      this.scenery.group,
+      this.worldEvents.group,
+      this.particles.group,
+    );
+    this.postFX = new PostFX(this.renderer, this.scene, this.chase.camera);
     this.hud = new Hud(container);
 
     this.director = new GameDirector(settings.values, {
-      onDrop: () => this.chase.addShake(0.7),
+      onDrop: () => {
+        this.chase.addShake(0.7);
+        this.dropPending = true;
+      },
       onEnd: () => this.onSongEnd(),
     });
     this.applySettings(settings.values);
@@ -172,6 +201,16 @@ export class Game {
     this.generator = new TrackGenerator(options.seed, {}, timeline ? this.intensityProfile(timeline) : null);
     this.trackRenderer.setGenerator(this.generator);
     this.trackRenderer.update(0);
+
+    // World: scenery density follows the music; events are planned from the analysis.
+    const intensity = timeline ? this.intensityProfile(timeline) : () => 0.55;
+    this.scenery.setSource(this.generator, options.seed, (d) => 0.25 + 0.75 * intensity(d));
+    const tuning = this.vehicle.tuning;
+    this.worldPlan = music ? planWorld(music.analysis, options.seed, (t) => distanceAtSongTime(t, tuning)) : null;
+    this.worldEvents.setPlan(this.worldPlan);
+    this.paletteName = this.scheduledPalette(music ? -LEAD_IN : 0);
+    this.environment.transitionTo(PALETTES[this.paletteName], 0);
+    this.dropPending = false;
     this.chase.reset();
     copyVehicleState(this.vehicle.state, this.previous);
 
@@ -238,6 +277,10 @@ export class Game {
     this.vehicleModel.dispose();
     this.rhythmRenderer.dispose();
     this.environment.dispose();
+    this.scenery.dispose();
+    this.worldEvents.dispose();
+    this.particles.dispose();
+    this.postFX.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }
@@ -273,6 +316,8 @@ export class Game {
 
     this.trackRenderer.update(s.distance);
     this.trackRenderer.setGlow(music.beatPulse, music.intensity);
+    this.scenery.update(this.trackRenderer.activeFirst, this.trackRenderer.activeLast);
+    this.updatePalette(songTime);
 
     // Place the vehicle on the road surface, aligned with the road frame.
     this.generator.pointAt(s.distance, s.lateral, RIDE_HEIGHT, this.frame, this.vehiclePosition);
@@ -289,11 +334,34 @@ export class Game {
     this.chase.update(frameDt, this.vehiclePosition, this.frame, this.aheadPoint, s.speed / this.vehicle.tuning.cruiseSpeed, fovBoost);
     this.processRhythmEvents();
     this.rhythmRenderer.update(frameDt, s.distance, songTime, music.beatPulse, this.generator, this.chase.camera);
-    this.environment.update(this.chase.camera.position);
+    this.environment.update(this.chase.camera.position, frameDt);
     this.environment.applyMusic(music);
-    this.renderer.toneMappingExposure = 1.1 + 0.6 * music.flash;
+    const palette = this.environment.palette;
+    const effects = this.settings.values.effects;
+    const build = this.worldPlan ? buildProgress(this.worldPlan, songTime) : 0;
+    this.scenery.animate(songTime, music, palette, build);
+    this.worldEvents.update(s.distance, songTime, music, palette, this.generator, effects);
+    if (this.dropPending) {
+      this.dropPending = false;
+      // High and far ahead: the burst frames the sky instead of covering the road and notes.
+      this.generator.pointAt(s.distance + 110, 0, 34, this.aheadFrame, this.aheadPoint);
+      this.particles.triggerBurst(this.aheadPoint, palette.accentB);
+    }
+    this.particles.update(frameDt, s.distance, s.speed, music, palette, this.generator, effects);
+    const bloom = this.settings.values.bloom;
+    // Bloom already amplifies the drop flash, so the exposure kick is smaller with it.
+    this.renderer.toneMappingExposure = 1.1 + (bloom ? 0.3 : 0.6) * music.flash;
 
-    this.renderer.render(this.scene, this.chase.camera);
+    // Count draw calls across all passes (bloom renders several).
+    this.renderer.info.reset();
+    if (bloom) {
+      const reduced = this.settings.values.reduceFlashes;
+      const pulse = reduced ? 0 : 0.2 * music.beatPulse + 0.35 * music.flash;
+      this.postFX.setStrength((0.55 + pulse) * (0.4 + 0.6 * effects));
+      this.postFX.render(frameDt);
+    } else {
+      this.renderer.render(this.scene, this.chase.camera);
+    }
 
     if (this.finishedAt !== null && !this.resultsShown && songTime - this.finishedAt >= RESULTS_DELAY) {
       this.resultsShown = true;
@@ -320,6 +388,7 @@ export class Game {
         tempo: tempo ? `${tempo.bpm.toFixed(1)} (${Math.round(tempo.confidence * 100)}%)` : '—',
         latency: `${this.settings.values.latencyMs} ms`,
         intensity: music.intensity.toFixed(2),
+        palette: this.paletteName ?? '—',
       },
     });
   }
@@ -394,6 +463,29 @@ export class Game {
     };
   }
 
+  /** Palette for a song time: planned per section with music, rotating slowly without. */
+  private scheduledPalette(time: number): PaletteName {
+    if (this.worldPlan) return paletteAt(this.worldPlan, time);
+    const index = Math.floor(Math.max(0, time) / FREE_PALETTE_SECONDS) + (this.run.seed % FREE_PALETTES.length);
+    return FREE_PALETTES[index % FREE_PALETTES.length];
+  }
+
+  /**
+   * Switches palettes as sections change (GDD §5.5): gradual by default,
+   * quick when a light tunnel hides the change, instant on a drop.
+   */
+  private updatePalette(time: number): void {
+    const name = this.scheduledPalette(time);
+    if (name === this.paletteName) return;
+    this.paletteName = name;
+    const plan = this.worldPlan;
+    const near = (t: number) => Math.abs(t - time) < 0.5;
+    let seconds = 2.5;
+    if (plan?.monuments.some((m) => near(m.time))) seconds = 0;
+    else if (plan?.tunnels.some((t) => near(t.start))) seconds = 0.8;
+    this.environment.transitionTo(PALETTES[name], seconds);
+  }
+
   /** Musical intensity along the track, mapped from distance to song time. */
   private intensityProfile(timeline: MusicTimeline): (distance: number) => number {
     const frame = createMusicFrame();
@@ -420,6 +512,7 @@ export class Game {
     const width = this.container.clientWidth || window.innerWidth;
     const height = this.container.clientHeight || window.innerHeight;
     this.renderer.setSize(width, height);
+    this.postFX?.setSize(width, height);
     this.chase.setAspect(width / height);
   };
 }
